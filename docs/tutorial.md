@@ -1,0 +1,82 @@
+# Fixed-Morph evidence tutorial
+
+Phase 2 estimates evidence after posterior sampling. It does not discover a
+posterior from the original prior.
+
+## 1. Supply representative posterior samples
+
+Use an array whose columns match the model coordinates:
+
+```python
+posterior_samples = np.load("posterior_samples.npy")
+```
+
+Every material posterior mode must be represented. The non-defensive Phase 2
+proposal cannot repair omitted support.
+
+## 2. Define normalized model densities
+
+```python
+model = CallableModel(
+    ndim=2,
+    parameter_names=("x", "y"),
+    log_likelihood_fn=log_likelihood,
+    log_prior_fn=normalized_log_prior,
+)
+```
+
+Both functions receive `(n, 2)` batches and return `(n,)`. Include all prior
+normalization constants.
+
+## 3. Fit MorphZ once
+
+```python
+proposal = MorphProposal.fit(
+    posterior_samples,
+    group_file="params_2-order_TC.json",
+    param_names=model.parameter_names,
+    kde_bw="silverman",
+)
+```
+
+Sampling and normalized log-density evaluation come from this same fixed
+`GroupKDE`.
+
+## 4. Run
+
+```python
+sampler = MINSampler(
+    model,
+    proposal,
+    n_live=500,
+    rng=np.random.default_rng(42),
+)
+result = sampler.run(
+    dlogz=1e-4,
+    max_iterations=20_000,
+    max_proposals_per_replacement=200_000,
+)
+```
+
+Inspect termination before interpreting evidence:
+
+```python
+print(result.success, result.termination_reason)
+print(result.logz, result.logzerr)
+print(summarize(result))
+```
+
+`logzerr` is the theoretical \(\sqrt{H/N_{\rm live}}\) approximation and does
+not include all Morph-fit uncertainty. Repeat complete runs and compare with
+direct importance sampling under the same fixed Morph proposal.
+
+## 5. Plot stored results
+
+```python
+figure, axes = plot_run(result)
+figure.savefig("run.png")
+```
+
+Plots consume only the result. The full executable Gaussian example is
+[`examples/phase2_gaussian.py`](../examples/phase2_gaussian.py).
+

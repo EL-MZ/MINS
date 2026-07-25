@@ -26,22 +26,37 @@ catch user exceptions to guess vectorization.
 ```python
 proposal = MorphProposal.fit(
     posterior_samples,
-    group_file="params_2-order_TC.json",
+    morph_type="2_group",
     param_names=("x", "y"),
     kde_bw=0.02,
 )
 ```
 
-Alternatively, pass MorphZ group entries through `groups=...`; `groups=[]`
-selects independent one-dimensional components. Training data must be finite
-with shape `(n_samples, ndim)`.
+`morph_type="{k}_group"` follows MorphZ's automatic grouped workflow:
+`Nth_TC.compute_and_save_tc` computes the k-order total correlations, then
+`GroupKDE` greedily selects non-overlapping groups. For example, use
+`morph_type="2_group"` or `morph_type="3_group"`; the literal string
+`"n_group"` is not valid. Intermediate TC files are held in a temporary
+directory and removed after fitting.
+
+Alternatively, load precomputed MorphZ entries with `group_file=...`, or pass
+them directly through `groups=...`; `groups=[]` selects independent
+one-dimensional components. These three grouping inputs are mutually
+exclusive. Training data must be finite with shape `(n_samples, ndim)`.
+
+The selected structure is recorded in metadata:
+
+```python
+proposal.metadata.selected_groups
+proposal.metadata.single_parameters
+```
 
 The adapter uses the installed `morphZ.GroupKDE` directly. It copies training
-data, loads a group file into memory to prevent MorphZ's optional selection-file
-write, calls `GroupKDE.resample` for draws, and calls the same fitted object's
-normalized `logpdf` for `log_prob`. MorphZ 0.4.1 uses integer seeds, so the
-adapter derives one from the sampler's explicit NumPy Generator per resample.
-The inspected MorphZ implementation restores legacy global RNG state.
+data, resolves grouping data in memory, calls `GroupKDE.resample` for draws,
+and calls the same fitted object's normalized `logpdf` for `log_prob`. MorphZ
+0.4.1 uses integer seeds, so the adapter derives one from the sampler's
+explicit NumPy Generator per resample. The inspected MorphZ implementation
+restores legacy global RNG state.
 
 ## MINSampler
 

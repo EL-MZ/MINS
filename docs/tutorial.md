@@ -33,14 +33,15 @@ normalization constants.
 ```python
 proposal = MorphProposal.fit(
     posterior_samples,
-    group_file="params_2-order_TC.json",
+    morph_type="2_group",
     param_names=model.parameter_names,
     kde_bw="silverman",
 )
 ```
 
-Sampling and normalized log-density evaluation come from this same fixed
-`GroupKDE`.
+MorphZ computes all second-order total correlations, greedily selects disjoint
+groups, and fits one fixed `GroupKDE`. Sampling and normalized log-density
+evaluation come from that same fitted object.
 
 ## 4. Run
 

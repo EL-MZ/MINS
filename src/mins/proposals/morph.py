@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import numpy as np
@@ -25,6 +27,8 @@ class MorphMetadata:
     min_tc: float | None
     top_k_greedy: int
     group_source: str
+    selected_groups: tuple[tuple[str, ...], ...]
+    single_parameters: tuple[str, ...]
     morphz_version: str
     rng_note: str
 
@@ -57,6 +61,7 @@ class MorphProposal:
         cls,
         posterior_samples: ArrayLike,
         *,
+        morph_type: str | None = None,
         group_file: str | Path | None = None,
         groups: Sequence[Sequence[object]] | None = None,
         param_names: Sequence[str] | None = None,
@@ -71,6 +76,11 @@ class MorphProposal:
         posterior_samples
             Finite training values with shape ``(n_samples, ndim)``. The input
             is copied and is never used as the initial live set.
+        morph_type
+            Automatic MorphZ grouped approximation in ``"{k}_group"`` form,
+            such as ``"2_group"`` or ``"3_group"``. MorphZ computes k-order
+            total correlations and ``GroupKDE`` performs greedy disjoint-group
+            selection. Temporary TC artifacts are removed after fitting.
         group_file
             JSON grouping definition accepted by MorphZ. MINS reads the file
             and passes its contents in memory to prevent MorphZ from writing a
@@ -106,8 +116,11 @@ class MorphProposal:
             )
         if not np.all(np.isfinite(samples)):
             raise ValueError("posterior_samples must contain only finite values")
-        if group_file is not None and groups is not None:
-            raise ValueError("specify only one of group_file and groups")
+        grouping_inputs = sum(
+            option is not None for option in (morph_type, group_file, groups)
+        )
+        if grouping_inputs > 1:
+            raise ValueError("specify only one of morph_type, group_file, and groups")
         if param_names is None:
             names = tuple(f"param_{index}" for index in range(samples.shape[1]))
         else:
@@ -119,7 +132,44 @@ class MorphProposal:
         if isinstance(top_k_greedy, bool) or top_k_greedy < 1:
             raise ValueError("top_k_greedy must be a positive integer")
 
-        if group_file is not None:
+        try:
+            import morphZ
+        except ImportError as error:  # pragma: no cover - environment dependent
+            raise MissingOptionalDependency(
+                "MorphProposal requires MorphZ; install MINS with the 'morph' extra"
+            ) from error
+
+        if morph_type is not None:
+            match = re.fullmatch(r"([1-9][0-9]*)_group", morph_type)
+            if match is None:
+                raise ValueError(
+                    "morph_type must use MorphZ's '<k>_group' form, "
+                    "for example '2_group'; literal 'n_group' is not valid"
+                )
+            n_order = int(match.group(1))
+            if n_order < 2:
+                raise ValueError("group order in morph_type must be at least 2")
+            if n_order > samples.shape[1]:
+                raise ValueError(
+                    "group order in morph_type cannot exceed posterior dimension"
+                )
+            with TemporaryDirectory(prefix="mins-morphz-tc-") as temporary_path:
+                morphZ.Nth_TC.compute_and_save_tc(
+                    samples,
+                    names=list(names),
+                    n_order=n_order,
+                    out_path=temporary_path,
+                )
+                tc_path = Path(temporary_path) / f"params_{n_order}-order_TC.json"
+                if not tc_path.is_file():
+                    raise RuntimeError(
+                        "MorphZ total-correlation computation did not create "
+                        f"{tc_path.name}"
+                    )
+                with tc_path.open(encoding="utf-8") as stream:
+                    group_definition = json.load(stream)
+            group_source = f"automatic:{morph_type}"
+        elif group_file is not None:
             group_path = Path(group_file)
             with group_path.open(encoding="utf-8") as stream:
                 group_definition = json.load(stream)
@@ -130,13 +180,6 @@ class MorphProposal:
         else:
             group_definition = []
             group_source = "independent-default"
-
-        try:
-            import morphZ
-        except ImportError as error:  # pragma: no cover - environment dependent
-            raise MissingOptionalDependency(
-                "MorphProposal requires MorphZ; install MINS with the 'morph' extra"
-            ) from error
 
         backend = morphZ.GroupKDE(
             samples,
@@ -155,6 +198,13 @@ class MorphProposal:
             min_tc=min_tc,
             top_k_greedy=top_k_greedy,
             group_source=group_source,
+            selected_groups=tuple(
+                tuple(str(name) for name in group.get("names", ()))
+                for group in getattr(backend, "groups", ())
+            ),
+            single_parameters=tuple(
+                str(name) for name in getattr(backend, "singles", ())
+            ),
             morphz_version=str(getattr(morphZ, "__version__", "unknown")),
             rng_note=(
                 "MINS derives an integer seed from its Generator for each MorphZ "

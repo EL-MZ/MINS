@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.0.dev3 - 2026-07-25
+
+- Added automatic MorphZ total-correlation and greedy group selection through
+  `MorphProposal.fit(..., morph_type="{k}_group")`.
+
 ## 0.1.0.dev2 - 2026-07-25
 
 - Added reproducible equal-weight posterior resampling on `MINSResult`.

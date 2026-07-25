@@ -64,7 +64,7 @@ MPLCONFIGDIR=/tmp/mins-mpl PYTHONPATH=src python \
 
 | Check | Expected logz | Obtained logz / status |
 |---|---:|---:|
-| Full test suite | all pass | 46 passed |
+| Full test suite | all pass | 52 passed |
 | Constant integrand | `0.91629073` | exact to `1e-12` |
 | Gaussian example, seed 12 | `-1.72365749` | `-1.72975180 ± 0.01589677` |
 | Peak–plateau, seed 2026 | `-0.13353139` | `-0.12867532 ± 0.07629106` |

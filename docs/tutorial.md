@@ -55,8 +55,13 @@ result = sampler.run(
     dlogz=1e-4,
     max_iterations=20_000,
     max_proposals_per_replacement=200_000,
+    progress=True,
 )
 ```
+
+The progress bar's `rem` field is the estimated live-evidence fraction. The
+scientific stop occurs when `rem < dlogz`; hard resource-limit stops are shown
+separately.
 
 Inspect termination before interpreting evidence:
 
@@ -70,6 +75,17 @@ print(summarize(result))
 not include all Morph-fit uncertainty. Repeat complete runs and compare with
 direct importance sampling under the same fixed Morph proposal.
 
+Every displayed statistic remains available after the run:
+
+```python
+result.history.logz_total
+result.history.logzerr
+result.history.information
+result.history.remaining_fraction
+result.history.acceptance_fraction
+result.history.likelihood_calls
+```
+
 ## 5. Plot stored results
 
 ```python
@@ -79,4 +95,3 @@ figure.savefig("run.png")
 
 Plots consume only the result. The full executable Gaussian example is
 [`examples/phase2_gaussian.py`](../examples/phase2_gaussian.py).
-

@@ -60,6 +60,7 @@ result = sampler.run(
     max_proposals_per_replacement=200_000,
     max_likelihood_calls=None,
     max_wall_time=None,
+    progress=True,
 )
 ```
 
@@ -71,9 +72,21 @@ points are new proposal draws. At every iteration, ordering and rejection use
 Use `"randomized_plateau"` for targets with exact nonzero-probability ties. It
 stores an independent uniform auxiliary value for every dead and live point.
 
-An optional `progress` callback receives a small read-only-by-convention mapping
-after each completed iteration. Library code does not print, display, or write
-files.
+Progress is silent by default. `progress=True` enables an optional
+`tqdm.auto` bar suitable for terminals and notebooks. Install it through
+`.[progress]`. The bar displays:
+
+- iteration and `n_live`;
+- likelihood calls and constrained-proposal efficiency;
+- current total `logZ` and theoretical `logZerr`;
+- current information in nats;
+- remaining-evidence fraction and stopping tolerance;
+- the discarded `logPsi` threshold.
+
+A custom callable can be passed instead of `True`. It receives a mapping after
+every completed iteration with the displayed quantities plus dead/live
+evidence, per-iteration proposal counts, live `logPsi` range, and elapsed time.
+Library code does not otherwise print, display, or write files.
 
 ## Result
 
@@ -90,8 +103,9 @@ Dead and final-live arrays separately store points, `log_likelihood`,
 `all_points`, `all_log_psi`, and `posterior_weights` use that same ordering.
 
 `RunHistory` stores every completed threshold, volume interval, cumulative
-dead/live/total log evidence, live pseudo-likelihood range, calls, proposal
-counts, acceptance fraction, and elapsed time.
+dead/live/total log evidence, information, `logzerr`, remaining fraction, live
+pseudo-likelihood range, calls, proposal counts, acceptance fraction, and
+elapsed time.
 
 ## Failure semantics
 
@@ -116,4 +130,3 @@ max-live remainder.
 
 `plot_run`, `plot_weight_health`, and `plot_posterior_1d` return Matplotlib
 objects. They never call `show` or save files.
-

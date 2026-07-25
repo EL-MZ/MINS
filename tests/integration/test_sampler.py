@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from tests.helpers import StandardNormalProposal
@@ -150,3 +152,74 @@ def test_wall_time_limit_returns_initialized_partial_result() -> None:
     assert result.termination_reason == "max_wall_time"
     assert result.niter == 0
     assert result.logz == pytest.approx(np.log(2.5), abs=1e-12)
+
+
+def test_progress_callback_receives_standard_nested_sampling_information() -> None:
+    model, proposal = _constant_problem()
+    snapshots: list[dict[str, float | int]] = []
+    result = MINSampler(
+        model,
+        proposal,
+        n_live=10,
+        rng=31,
+        tie_policy="randomized_plateau",
+    ).run(
+        dlogz=0.3,
+        max_iterations=100,
+        progress=lambda info: snapshots.append(dict(info)),
+    )
+    required = {
+        "iteration",
+        "nlive",
+        "likelihood_calls",
+        "proposals",
+        "efficiency_percent",
+        "logz",
+        "logzerr",
+        "information",
+        "remaining_fraction",
+        "stopping_tolerance",
+        "threshold",
+        "elapsed_seconds",
+    }
+    assert len(snapshots) == result.niter
+    assert required <= snapshots[-1].keys()
+    assert snapshots[-1]["logz"] == pytest.approx(result.logz)
+    assert snapshots[-1]["logzerr"] == pytest.approx(result.logzerr, abs=1e-8)
+    assert snapshots[-1]["information"] == pytest.approx(result.information, abs=1e-12)
+    assert snapshots[-1]["remaining_fraction"] < result.config.dlogz
+    assert result.history.logzerr[-1] == pytest.approx(result.logzerr, abs=1e-8)
+    assert result.history.information[-1] == pytest.approx(
+        result.information, abs=1e-12
+    )
+
+
+def test_progress_true_renders_standard_terminal_fields(capsys: Any) -> None:
+    model, proposal = _constant_problem()
+    result = MINSampler(
+        model,
+        proposal,
+        n_live=8,
+        rng=32,
+        tie_policy="randomized_plateau",
+    ).run(
+        dlogz=0.4,
+        max_iterations=50,
+        progress=True,
+    )
+    captured = capsys.readouterr()
+    assert result.success
+    assert "logZ" in captured.err
+    assert "logZerr" in captured.err
+    assert "ncall" in captured.err
+    assert "eff" in captured.err
+    assert "rem" in captured.err
+
+
+def test_invalid_progress_option_is_rejected() -> None:
+    model, proposal = _constant_problem()
+    with pytest.raises(TypeError, match="progress"):
+        MINSampler(model, proposal, n_live=8, rng=33).run(
+            max_iterations=1,
+            progress="yes",  # type: ignore[arg-type]
+        )

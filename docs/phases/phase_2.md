@@ -35,6 +35,7 @@ final-live corrections. See `docs/mathematical_contract.md`.
 - `quadrature.py`: pure log-space evidence calculations.
 - `sampler.py`: serial state machine and typed termination.
 - `results.py`: immutable recomputable results and histories.
+- `progress.py`: optional tqdm bar and callback snapshots.
 - `diagnostics.py`, `plotting.py`: result-only health checks and figures.
 - `benchmarks/`, `tests/`, `examples/`, and documentation pages.
 
@@ -62,7 +63,7 @@ MPLCONFIGDIR=/tmp/mins-mpl PYTHONPATH=src python \
 
 | Check | Expected logz | Obtained logz / status |
 |---|---:|---:|
-| Full test suite | all pass | 34 passed |
+| Full test suite | all pass | 40 passed |
 | Constant integrand | `0.91629073` | exact to `1e-12` |
 | Gaussian example, seed 12 | `-1.72365749` | `-1.72975180 ± 0.01589677` |
 | Peak–plateau, seed 2026 | `-0.13353139` | `-0.12867532 ± 0.07629106` |
@@ -73,7 +74,9 @@ MPLCONFIGDIR=/tmp/mins-mpl PYTHONPATH=src python \
 Ruff format/lint, strict mypy, wheel/sdist build, Twine metadata checks,
 clean-wheel installation, outside-repository import, and an installed
 Morph-backed sampler smoke run also passed. Branch-aware coverage was 86%
-overall; no arbitrary pass threshold is configured.
+overall; no arbitrary pass threshold is configured. The optional tqdm
+terminal/notebook bar and full custom-callback snapshot were also exercised
+through integration tests and the installed wheel.
 
 The repeated Gaussian test uses seeds 11, 12, and 13 and declares tolerances
 before assertion: absolute mean log-evidence bias below `0.04`, empirical
@@ -101,6 +104,8 @@ adapted by reliable row-wise public calls; no Morph density is reimplemented.
 - Row-wise MorphZ density evaluation prioritizes correctness over speed.
 - MorphZ 0.4.1 accepts integer resampling seeds and temporarily uses/restores
   legacy NumPy global state internally.
+- Progress `logzerr` is the current \(\sqrt{H/N_{\rm live}}\) approximation,
+  not an independent convergence guarantee.
 - Exact owner experiments and group files were not supplied.
 
 ## Reproduction instructions

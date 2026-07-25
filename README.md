@@ -24,6 +24,13 @@ without resolving the optional extra:
 python -m pip install -e . --no-deps
 ```
 
+For a normal user installation with Morph and the terminal/notebook progress
+bar:
+
+```bash
+python -m pip install -e ".[morph,progress]"
+```
+
 ## Minimal API sketch
 
 ```python
@@ -45,10 +52,18 @@ proposal = MorphProposal.fit(
     groups=[],
 )
 sampler = MINSampler(model, proposal, n_live=100, rng=42)
-result = sampler.run(dlogz=1e-3, max_iterations=5_000)
+result = sampler.run(
+    dlogz=1e-3,
+    max_iterations=5_000,
+    progress=True,
+)
 
 print(result.logz, result.logzerr, result.termination_reason)
 ```
+
+The progress bar reports iteration, live-point count, likelihood calls,
+proposal efficiency, `logZ`, current theoretical `logZerr`, information,
+remaining-evidence fraction, and the current `logPsi` threshold.
 
 The normalized prior, Morph target transformation, evidence quadrature, and
 stopping semantics are defined in
@@ -72,4 +87,3 @@ Phase reports and exact validation commands are stored under
 ## License
 
 BSD 3-Clause. See [LICENSE](LICENSE).
-

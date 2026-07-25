@@ -50,6 +50,7 @@ def main() -> None:
         dlogz=0.08,
         max_iterations=400,
         max_proposals_per_replacement=5_000,
+        progress=True,
     )
     expected_logz = -0.5 * np.log(10.0 * np.pi)
     diagnostics = summarize(result)

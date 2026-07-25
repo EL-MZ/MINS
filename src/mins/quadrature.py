@@ -22,6 +22,75 @@ class QuadratureSummary:
     log_posterior_weights: NDArray[np.float64]
 
 
+def update_log_weighted_mean(
+    log_total: float,
+    mean: float,
+    log_contribution: float,
+    value: float,
+) -> tuple[float, float]:
+    """Add one positive log-space contribution to a weighted mean.
+
+    Parameters
+    ----------
+    log_total
+        Logarithm of the current total weight, or ``-inf`` when empty.
+    mean
+        Current weighted mean. Ignored when ``log_total == -inf``.
+    log_contribution
+        Logarithm of the new non-negative weight.
+    value
+        Value associated with the new weight.
+
+    Returns
+    -------
+    tuple
+        Updated ``(log_total, weighted_mean)``.
+    """
+    if np.isneginf(log_contribution):
+        return log_total, mean
+    if np.isneginf(log_total):
+        return log_contribution, value
+    new_log_total = float(np.logaddexp(log_total, log_contribution))
+    old_fraction = float(np.exp(log_total - new_log_total))
+    new_fraction = float(np.exp(log_contribution - new_log_total))
+    return new_log_total, old_fraction * mean + new_fraction * value
+
+
+def estimate_information(
+    *,
+    logz_dead: float,
+    dead_log_psi_mean: float,
+    logz_live: float,
+    live_log_psi: ArrayLike,
+    logz_total: float,
+) -> float:
+    """Estimate current information from dead and remaining live mass.
+
+    This is the same discrete information calculation used at finalization,
+    expressed incrementally for progress reporting.
+
+    Returns
+    -------
+    float
+        Non-negative information estimate in nats. Tiny negative round-off is
+        clipped to zero.
+    """
+    live_psi = np.asarray(live_log_psi, dtype=float)
+    if live_psi.ndim != 1 or len(live_psi) < 2:
+        raise ValueError("live_log_psi must be one-dimensional with length >= 2")
+    total_mean = 0.0
+    if np.isfinite(logz_dead):
+        total_mean += float(np.exp(logz_dead - logz_total)) * dead_log_psi_mean
+    if np.isfinite(logz_live):
+        positive = np.isfinite(live_psi)
+        live_normalizer = float(logsumexp(live_psi))
+        live_mean = float(
+            np.sum(np.exp(live_psi[positive] - live_normalizer) * live_psi[positive])
+        )
+        total_mean += float(np.exp(logz_live - logz_total)) * live_mean
+    return max(0.0, total_mean - logz_total)
+
+
 def logdiffexp(log_a: float, log_b: float) -> float:
     """Return ``log(exp(log_a) - exp(log_b))`` for ``log_a > log_b``.
 

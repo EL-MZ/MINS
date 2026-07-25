@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_public_import_and_version() -> None:
-    assert mins.__version__ == "0.1.0.dev0"
+    assert mins.__version__ == "0.1.0.dev1"
     assert mins.Model is not None
     assert mins.Proposal is not None
 

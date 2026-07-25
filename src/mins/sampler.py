@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -17,15 +17,16 @@ from .constrained import (
     validate_proposal_sample,
 )
 from .model import Model
+from .progress import ProgressOption, create_progress_reporter
 from .proposals import MorphProposal, Proposal
 from .quadrature import (
     dead_log_contribution,
+    estimate_information,
     estimated_live_logz,
     finalize_quadrature,
+    update_log_weighted_mean,
 )
 from .results import MINSResult, RunHistory
-
-ProgressCallback = Callable[[Mapping[str, float | int]], None]
 
 
 def _as_generator(
@@ -124,9 +125,25 @@ class MINSampler:
         max_proposals_per_replacement: int = 100_000,
         max_likelihood_calls: int | None = None,
         max_wall_time: float | None = None,
-        progress: ProgressCallback | None = None,
+        progress: ProgressOption = False,
     ) -> MINSResult:
         """Run deterministic-shrinkage nested importance sampling.
+
+        Parameters
+        ----------
+        dlogz
+            Relative estimated-live-evidence stopping tolerance.
+        max_iterations
+            Hard limit on completed replacements.
+        max_proposals_per_replacement
+            Hard proposal limit for one constrained draw.
+        max_likelihood_calls
+            Optional run-wide likelihood-evaluation limit.
+        max_wall_time
+            Optional wall-time limit in seconds.
+        progress
+            ``False`` for silence, ``True`` for the standard tqdm bar, or a
+            callable receiving a progress mapping after every iteration.
 
         Returns
         -------
@@ -142,6 +159,9 @@ class MINSampler:
             If proposal samples or densities are malformed.
         ProposalSupportError
             If ``q`` is zero at a finite target-integrand point.
+        MissingOptionalDependency
+            If ``progress=True`` is requested without the optional tqdm
+            dependency.
         """
         config = MINSConfig(
             n_live=self.n_live,
@@ -153,20 +173,29 @@ class MINSampler:
             max_wall_time=max_wall_time,
             tie_policy=self.tie_policy,
         )
+        progress_reporter = create_progress_reporter(
+            progress,
+            max_iterations=config.max_iterations,
+            n_live=config.n_live,
+        )
         start = time.monotonic()
         deadline = None if max_wall_time is None else start + max_wall_time
         initial_state = copy.deepcopy(self.rng.bit_generator.state)
         evaluator = BatchEvaluator(self.model, self.proposal)
 
-        live_theta = np.array(
-            validate_proposal_sample(
-                self.proposal.sample(self.n_live, self.rng),
-                n=self.n_live,
-                ndim=self.model.ndim,
-            ),
-            copy=True,
-        )
-        initial = evaluator.evaluate(live_theta)
+        try:
+            live_theta = np.array(
+                validate_proposal_sample(
+                    self.proposal.sample(self.n_live, self.rng),
+                    n=self.n_live,
+                    ndim=self.model.ndim,
+                ),
+                copy=True,
+            )
+            initial = evaluator.evaluate(live_theta)
+        except BaseException:
+            progress_reporter.close("error")
+            raise
         live_log_likelihood = np.array(initial.log_likelihood, copy=True)
         live_log_prior = np.array(initial.log_prior, copy=True)
         live_log_q = np.array(initial.log_q, copy=True)
@@ -186,6 +215,9 @@ class MINSampler:
         history_logz_dead: list[float] = []
         history_logz_live: list[float] = []
         history_logz_total: list[float] = []
+        history_information: list[float] = []
+        history_logzerr: list[float] = []
+        history_remaining_fraction: list[float] = []
         history_live_min: list[float] = []
         history_live_median: list[float] = []
         history_live_max: list[float] = []
@@ -197,6 +229,7 @@ class MINSampler:
         niter = 0
         n_proposals = 0
         logz_dead = -np.inf
+        dead_log_psi_mean = 0.0
         termination_reason = ""
         while not termination_reason:
             if niter >= config.max_iterations:
@@ -218,18 +251,22 @@ class MINSampler:
                 worst = int(np.argmin(live_log_psi))
             threshold = float(live_log_psi[worst])
             threshold_tie = float(live_tie_breakers[worst])
-            attempt = draw_constrained(
-                evaluator=evaluator,
-                proposal=self.proposal,
-                threshold=threshold,
-                threshold_tie_breaker=threshold_tie,
-                tie_policy=config.tie_policy,
-                rng=self.rng,
-                batch_size=config.proposal_batch_size,
-                max_proposals=config.max_proposals_per_replacement,
-                max_likelihood_calls=config.max_likelihood_calls,
-                deadline=deadline,
-            )
+            try:
+                attempt = draw_constrained(
+                    evaluator=evaluator,
+                    proposal=self.proposal,
+                    threshold=threshold,
+                    threshold_tie_breaker=threshold_tie,
+                    tie_policy=config.tie_policy,
+                    rng=self.rng,
+                    batch_size=config.proposal_batch_size,
+                    max_proposals=config.max_proposals_per_replacement,
+                    max_likelihood_calls=config.max_likelihood_calls,
+                    deadline=deadline,
+                )
+            except BaseException:
+                progress_reporter.close("error")
+                raise
             n_proposals += attempt.n_proposed
             if attempt.draw is None:
                 termination_reason = attempt.reason or "constrained_sampling_exhausted"
@@ -264,33 +301,65 @@ class MINSampler:
             live_tie_breakers[worst] = point.tie_breaker
             niter = iteration
 
-            logz_dead = float(np.logaddexp(logz_dead, log_weight))
+            logz_dead, dead_log_psi_mean = update_log_weighted_mean(
+                logz_dead,
+                dead_log_psi_mean,
+                log_weight,
+                threshold,
+            )
             logz_live = estimated_live_logz(log_x, live_log_psi)
             logz_total = float(np.logaddexp(logz_dead, logz_live))
+            information = estimate_information(
+                logz_dead=logz_dead,
+                dead_log_psi_mean=dead_log_psi_mean,
+                logz_live=logz_live,
+                live_log_psi=live_log_psi,
+                logz_total=logz_total,
+            )
+            logzerr = float(np.sqrt(information / self.n_live))
+            remaining_fraction = float(np.exp(logz_live - logz_total))
+            elapsed = time.monotonic() - start
             history_logz_dead.append(logz_dead)
             history_logz_live.append(logz_live)
             history_logz_total.append(logz_total)
+            history_information.append(information)
+            history_logzerr.append(logzerr)
+            history_remaining_fraction.append(remaining_fraction)
             history_live_min.append(float(np.min(live_log_psi)))
             history_live_median.append(float(np.median(live_log_psi)))
             history_live_max.append(float(np.max(live_log_psi)))
             history_proposals.append(attempt.n_proposed)
             history_likelihood_calls.append(evaluator.n_likelihood_calls)
             history_acceptance.append(niter / n_proposals)
-            history_elapsed.append(time.monotonic() - start)
+            history_elapsed.append(elapsed)
 
-            if progress is not None:
-                progress(
-                    {
-                        "iteration": niter,
-                        "logz": logz_total,
-                        "logz_live": logz_live,
-                        "threshold": threshold,
-                        "likelihood_calls": evaluator.n_likelihood_calls,
-                    }
-                )
+            progress_reporter.update(
+                {
+                    "iteration": niter,
+                    "max_iterations": config.max_iterations,
+                    "nlive": config.n_live,
+                    "likelihood_calls": evaluator.n_likelihood_calls,
+                    "proposals": n_proposals,
+                    "proposals_iteration": attempt.n_proposed,
+                    "efficiency_percent": 100.0 * niter / n_proposals,
+                    "logz": logz_total,
+                    "logzerr": logzerr,
+                    "information": information,
+                    "logz_dead": logz_dead,
+                    "logz_live": logz_live,
+                    "remaining_fraction": remaining_fraction,
+                    "stopping_tolerance": config.dlogz,
+                    "threshold": threshold,
+                    "live_min_log_psi": history_live_min[-1],
+                    "live_median_log_psi": history_live_median[-1],
+                    "live_max_log_psi": history_live_max[-1],
+                    "elapsed_seconds": elapsed,
+                }
+            )
             if logz_live - logz_total < np.log(config.dlogz):
                 termination_reason = "remaining_evidence"
 
+        progress_reporter.close(termination_reason)
         final_log_x = -niter / self.n_live
         quadrature = finalize_quadrature(
             dead_log_weights,
@@ -307,6 +376,9 @@ class MINSampler:
             logz_dead=np.asarray(history_logz_dead),
             logz_live=np.asarray(history_logz_live),
             logz_total=np.asarray(history_logz_total),
+            information=np.asarray(history_information),
+            logzerr=np.asarray(history_logzerr),
+            remaining_fraction=np.asarray(history_remaining_fraction),
             live_min_log_psi=np.asarray(history_live_min),
             live_median_log_psi=np.asarray(history_live_median),
             live_max_log_psi=np.asarray(history_live_max),

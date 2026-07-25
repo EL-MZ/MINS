@@ -23,9 +23,10 @@ Dependency direction is inward toward small protocols:
 - `quadrature.py` contains pure expected-volume evidence arithmetic.
 - `sampler.py` coordinates iteration and owns no density or plotting details.
 - `results.py` validates and freezes complete run outputs.
+- `progress.py` adapts optional tqdm or user callbacks to sampler snapshots.
 - `diagnostics.py` and `plotting.py` consume results without changing them.
 
 The sampler accepts any proposal satisfying the same normalized
 `sample`/`log_prob` contract, which makes statistical components independently
-testable. No library module writes files or displays plots during a run.
-
+testable. Progress is silent by default; `progress=True` opts into terminal or
+notebook output. No library module writes files or displays plots during a run.

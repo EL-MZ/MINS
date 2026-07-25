@@ -6,9 +6,12 @@ from scipy.special import logsumexp
 
 from mins.quadrature import (
     dead_log_contribution,
+    estimate_information,
+    estimated_live_logz,
     finalize_quadrature,
     live_log_contributions,
     logdiffexp,
+    update_log_weighted_mean,
 )
 
 pytestmark = pytest.mark.unit
@@ -52,3 +55,41 @@ def test_finalize_constant_integrand_identity_and_weights() -> None:
     assert summary.information == pytest.approx(0.0, abs=1e-13)
     assert summary.logzerr == pytest.approx(0.0, abs=1e-13)
     assert np.sum(np.exp(summary.log_posterior_weights)) == pytest.approx(1.0)
+
+
+def test_incremental_progress_information_matches_final_quadrature() -> None:
+    nlive = 8
+    dead_log_psi = np.linspace(-2.0, 0.4, 12)
+    live_log_psi = np.linspace(0.5, 1.2, nlive)
+    dead_log_weights = []
+    logz_dead = -np.inf
+    dead_mean = 0.0
+    for iteration, log_psi in enumerate(dead_log_psi, start=1):
+        log_weight = dead_log_contribution(iteration, nlive, log_psi)[2]
+        dead_log_weights.append(log_weight)
+        logz_dead, dead_mean = update_log_weighted_mean(
+            logz_dead,
+            dead_mean,
+            log_weight,
+            log_psi,
+        )
+
+    log_x = -len(dead_log_psi) / nlive
+    logz_live = estimated_live_logz(log_x, live_log_psi)
+    logz_total = float(np.logaddexp(logz_dead, logz_live))
+    progress_information = estimate_information(
+        logz_dead=logz_dead,
+        dead_log_psi_mean=dead_mean,
+        logz_live=logz_live,
+        live_log_psi=live_log_psi,
+        logz_total=logz_total,
+    )
+    final = finalize_quadrature(
+        dead_log_weights,
+        dead_log_psi,
+        log_x,
+        live_log_psi,
+        nlive,
+    )
+    assert progress_information == pytest.approx(final.information, abs=1e-13)
+    assert logz_total == pytest.approx(final.logz, abs=1e-13)

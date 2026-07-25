@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mins"
-version = "0.1.0.dev0"
+version = "0.1.0.dev1"
 description = "Experimental Morph-assisted nested importance sampling"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,6 +40,9 @@ morph = [
 plot = [
   "matplotlib>=3.7",
 ]
+progress = [
+  "tqdm>=4.66",
+]
 dev = [
   "build>=1.2",
   "matplotlib>=3.7",
@@ -48,6 +51,7 @@ dev = [
   "pytest>=8",
   "pytest-cov>=5",
   "ruff>=0.6",
+  "tqdm>=4.66",
   "twine>=5",
 ]
 
@@ -76,7 +80,11 @@ markers = [
 target-version = "py310"
 line-length = 88
 src = ["src", "tests"]
-extend-exclude = ["MINS_PHASE_2_MORPH_NESTED_SAMPLING.md"]
+extend-exclude = [
+  "MINS_PHASE_2_MORPH_NESTED_SAMPLING.md",
+  "examples/*.ipynb",
+  "examples/g_shell.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -91,7 +99,7 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["morphZ", "morphZ.*", "scipy", "scipy.*"]
+module = ["morphZ", "morphZ.*", "scipy", "scipy.*", "tqdm", "tqdm.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

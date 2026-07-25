@@ -86,7 +86,30 @@ result.history.acceptance_fraction
 result.history.likelihood_calls
 ```
 
-## 5. Plot stored results
+## 5. Obtain equal-weight posterior samples
+
+The native result is weighted:
+
+```python
+points = result.all_points
+weights = result.posterior_weights
+```
+
+When a downstream tool requires equal weights, resample directly from the
+result:
+
+```python
+equal_samples = result.resample_equal(
+    rng=123,
+    n_samples=10_000,
+)
+```
+
+The method uses systematic resampling and returns a new `(n_samples, ndim)`
+array. Duplicate rows are normal. Weighted estimates from `all_points` and
+`posterior_weights` should be preferred when the consumer supports them.
+
+## 6. Plot stored results
 
 ```python
 figure, axes = plot_run(result)

@@ -204,3 +204,59 @@ class MINSResult:
         values = np.concatenate((self.dead_log_psi, self.final_live_log_psi))
         values.setflags(write=False)
         return values
+
+    def resample_equal(
+        self,
+        rng: int | np.random.Generator,
+        n_samples: int | None = None,
+    ) -> NDArray[np.float64]:
+        """Return equal-weight posterior samples by systematic resampling.
+
+        Parameters
+        ----------
+        rng
+            Explicit NumPy generator or integer seed.
+        n_samples
+            Number of returned draws. By default, preserve the number of
+            weighted dead-plus-live points.
+
+        Returns
+        -------
+        numpy.ndarray
+            New output array with shape ``(n_samples, ndim)``. Points may
+            repeat, as required when resampling discrete quadrature mass.
+
+        Notes
+        -----
+        Weighted samples are the primary MINS posterior representation.
+        Resampling is convenient for tools that require equal weights but adds
+        Monte Carlo variation.
+        """
+        if isinstance(rng, np.random.Generator):
+            generator = rng
+        elif isinstance(rng, bool) or not isinstance(rng, (int, np.integer)):
+            raise TypeError("rng must be an integer seed or numpy.random.Generator")
+        else:
+            generator = np.random.default_rng(int(rng))
+
+        weighted_count = self.niter + self.nlive
+        if n_samples is None:
+            sample_count = weighted_count
+        elif (
+            isinstance(n_samples, bool)
+            or not isinstance(n_samples, (int, np.integer))
+            or n_samples < 1
+        ):
+            raise ValueError("n_samples must be a positive integer")
+        else:
+            sample_count = int(n_samples)
+
+        weights = self.posterior_weights
+        cumulative = np.cumsum(weights)
+        cumulative[-1] = 1.0
+        positions = (
+            np.arange(sample_count, dtype=float) + generator.random()
+        ) / sample_count
+        indices = np.searchsorted(cumulative, positions, side="right")
+        generator.shuffle(indices)
+        return np.array(self.all_points[indices], copy=True)

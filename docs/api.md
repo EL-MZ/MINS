@@ -102,6 +102,21 @@ Dead and final-live arrays separately store points, `log_likelihood`,
 `log_posterior_weights` covers dead then live points. Convenience properties
 `all_points`, `all_log_psi`, and `posterior_weights` use that same ordering.
 
+For consumers that require unweighted samples:
+
+```python
+equal_samples = result.resample_equal(
+    rng=123,
+    n_samples=10_000,
+)
+```
+
+`resample_equal` uses randomized systematic resampling and has no Dynesty
+dependency. The explicit seed or NumPy Generator is required for
+reproducibility. If `n_samples` is omitted, it returns `niter + nlive` rows.
+Repeated points are expected. Retain the original points and weights for
+highest-fidelity posterior summaries.
+
 `RunHistory` stores every completed threshold, volume interval, cumulative
 dead/live/total log evidence, information, `logzerr`, remaining fraction, live
 pseudo-likelihood range, calls, proposal counts, acceptance fraction, and

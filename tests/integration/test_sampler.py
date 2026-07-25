@@ -223,3 +223,63 @@ def test_invalid_progress_option_is_rejected() -> None:
             max_iterations=1,
             progress="yes",  # type: ignore[arg-type]
         )
+
+
+def test_result_equal_weight_resampling_is_reproducible_and_configurable() -> None:
+    model, proposal = _constant_problem()
+    result = MINSampler(
+        model,
+        proposal,
+        n_live=10,
+        rng=34,
+        tie_policy="randomized_plateau",
+    ).run(
+        dlogz=0.3,
+        max_iterations=100,
+    )
+    default_first = result.resample_equal(rng=91)
+    default_second = result.resample_equal(rng=91)
+    custom = result.resample_equal(
+        rng=np.random.default_rng(92),
+        n_samples=2_000,
+    )
+
+    np.testing.assert_array_equal(default_first, default_second)
+    assert default_first.shape == result.all_points.shape
+    assert custom.shape == (2_000, result.all_points.shape[1])
+    assert custom.flags.owndata
+    weighted_mean = np.average(
+        result.all_points,
+        axis=0,
+        weights=result.posterior_weights,
+    )
+    assert np.mean(custom, axis=0) == pytest.approx(weighted_mean, abs=0.1)
+
+
+@pytest.mark.parametrize("n_samples", [0, -1, 1.5, True])
+def test_result_equal_weight_resampling_validates_sample_count(
+    n_samples: Any,
+) -> None:
+    model, proposal = _constant_problem()
+    result = MINSampler(
+        model,
+        proposal,
+        n_live=8,
+        rng=35,
+        tie_policy="randomized_plateau",
+    ).run(dlogz=0.4, max_iterations=50)
+    with pytest.raises(ValueError, match="n_samples"):
+        result.resample_equal(rng=1, n_samples=n_samples)
+
+
+def test_result_equal_weight_resampling_requires_explicit_rng() -> None:
+    model, proposal = _constant_problem()
+    result = MINSampler(
+        model,
+        proposal,
+        n_live=8,
+        rng=36,
+        tie_policy="randomized_plateau",
+    ).run(dlogz=0.4, max_iterations=50)
+    with pytest.raises(TypeError, match="rng"):
+        result.resample_equal(rng="seed")  # type: ignore[arg-type]

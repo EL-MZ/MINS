@@ -35,6 +35,7 @@ final-live corrections. See `docs/mathematical_contract.md`.
 - `quadrature.py`: pure log-space evidence calculations.
 - `sampler.py`: serial state machine and typed termination.
 - `results.py`: immutable recomputable results and histories.
+- `MINSResult.resample_equal`: dependency-free equal-weight posterior draws.
 - `progress.py`: optional tqdm bar and callback snapshots.
 - `diagnostics.py`, `plotting.py`: result-only health checks and figures.
 - `benchmarks/`, `tests/`, `examples/`, and documentation pages.
@@ -63,7 +64,7 @@ MPLCONFIGDIR=/tmp/mins-mpl PYTHONPATH=src python \
 
 | Check | Expected logz | Obtained logz / status |
 |---|---:|---:|
-| Full test suite | all pass | 40 passed |
+| Full test suite | all pass | 46 passed |
 | Constant integrand | `0.91629073` | exact to `1e-12` |
 | Gaussian example, seed 12 | `-1.72365749` | `-1.72975180 ± 0.01589677` |
 | Peak–plateau, seed 2026 | `-0.13353139` | `-0.12867532 ± 0.07629106` |

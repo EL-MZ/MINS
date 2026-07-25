@@ -59,11 +59,20 @@ result = sampler.run(
 )
 
 print(result.logz, result.logzerr, result.termination_reason)
+
+equal_samples = result.resample_equal(
+    rng=43,
+    n_samples=10_000,
+)
 ```
 
 The progress bar reports iteration, live-point count, likelihood calls,
 proposal efficiency, `logZ`, current theoretical `logZerr`, information,
 remaining-evidence fraction, and the current `logPsi` threshold.
+
+`result.all_points` and `result.posterior_weights` are the primary weighted
+posterior representation. `result.resample_equal(...)` provides reproducible
+equal-weight draws for tools that do not accept weights.
 
 The normalized prior, Morph target transformation, evidence quadrature, and
 stopping semantics are defined in

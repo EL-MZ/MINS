@@ -81,18 +81,63 @@ not a calibration guarantee.
 
 ## Stopping semantics
 
-The scientific stop uses the mean-live estimate
+At every completed replacement the mean-live estimate is
 
 \[
 \log Z_{\rm live}=\log X_K+
 \operatorname{logsumexp}(\log\Psi^{\rm live})-\log N
 \]
 
-and succeeds when
-`log_z_live - log_z_total < log(dlogz)`. Iteration, likelihood-call,
-per-replacement proposal, and wall-time limits are hard failures, not evidence
-of convergence. The max-live remainder is stored only as a conservative
-diagnostic.
+and the legacy remaining-fraction diagnostic is
+
+\[
+f_{\rm live} = Z_{\rm live}/Z_{\rm total}.
+\]
+
+The default and legacy `dlogz` API succeeds when
+`f_live <= dlogz`. This measures the magnitude of evidence currently assigned
+to live points; it is not a direct estimate of evidence error.
+
+An explicit stopping policy may combine that diagnostic with the Kish live ESS
+
+\[
+N_{\rm eff,live}
+=\frac{(\sum_j\Psi_j)^2}{\sum_j\Psi_j^2},
+\]
+
+the live-mean relative standard error
+
+\[
+\operatorname{RSE}_{\rm live}
+=\sqrt{\max\left(
+\frac{N/N_{\rm eff,live}-1}{N-1},0\right)},
+\]
+
+and its first-order contribution to total log-evidence uncertainty
+
+\[
+\sigma_{\log Z,\rm live}
+\approx f_{\rm live}\operatorname{RSE}_{\rm live}.
+\]
+
+This last quantity estimates Monte Carlo uncertainty from representing the
+remaining integral with the finite live set. It excludes stochastic shrinkage,
+Morph-fitting uncertainty, missing proposal support, undiscovered modes, and
+correlated or invalid constrained draws. Policies may also use the range of
+recent `logZ` values and the theoretical nested-sampling approximation
+\(\sqrt{H/N}\). Stability can hold for a biased estimate, and theoretical
+`logzerr` is not a complete calibration guarantee.
+
+Enabled conditions combine with `"all"` or `"any"` and may require consecutive
+passes after a minimum iteration. An explicit policy succeeds with
+`termination_reason="stopping_criteria"`; legacy stopping retains
+`"remaining_evidence"`.
+
+Iteration, likelihood-call, per-replacement proposal, and wall-time limits are
+hard failures, not evidence of convergence. The max-live remainder remains a
+separate conservative diagnostic. Deterministic shrinkage
+\(X_i=\exp(-i/N)\) remains the central quadrature trajectory regardless of
+stopping policy.
 
 ## User obligations and limitations
 
@@ -104,4 +149,3 @@ diagnostic.
   or Morph-fitting uncertainty.
 - Phase 2 is post-processing evidence estimation and does not discover the
   posterior from the original prior.
-

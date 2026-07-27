@@ -36,7 +36,13 @@ python -m pip install -e ".[morph,progress]"
 ```python
 import numpy as np
 
-from mins import CallableModel, MINSampler, MorphProposal
+from mins import (
+    CallableModel,
+    MINSampler,
+    MorphProposal,
+    StoppingCriterionConfig,
+    StoppingPolicy,
+)
 
 model = CallableModel(
     ndim=1,
@@ -66,9 +72,33 @@ equal_samples = result.resample_equal(
 )
 ```
 
+The legacy `dlogz` interface remains the default scientific behavior. A
+multi-criterion policy is available as an opt-in experimental alternative:
+
+```python
+stopping = StoppingPolicy(
+    criteria=(
+        StoppingCriterionConfig("live_logz_error", 5e-3),
+        StoppingCriterionConfig("remaining_fraction", 5e-2),
+        StoppingCriterionConfig("logz_stability", 5e-3),
+    ),
+    mode="all",
+    consecutive=3,
+    min_iterations=10,
+    stability_window=10,
+)
+result = sampler.run(stopping=stopping, max_iterations=20_000)
+```
+
+These thresholds are initial calibration choices, not universal constants.
+`live_logz_error` estimates uncertainty transmitted from the finite live-set
+mean; `remaining_fraction` measures the magnitude of the live contribution.
+They are not interchangeable. See the [stopping guide](docs/stopping.md) for
+the complete API and limitations.
+
 The progress bar reports iteration, live-point count, likelihood calls,
-proposal efficiency, `logZ`, current theoretical `logZerr`, information,
-remaining-evidence fraction, and the current `logPsi` threshold.
+proposal efficiency, `logZ`, theoretical `logZerr`, finite-live uncertainty,
+remaining-evidence fraction, live ESS, and the stopping streak.
 
 `result.all_points` and `result.posterior_weights` are the primary weighted
 posterior representation. `result.resample_equal(...)` provides reproducible
@@ -77,8 +107,8 @@ equal-weight draws for tools that do not accept weights.
 The normalized prior, Morph target transformation, evidence quadrature, and
 stopping semantics are defined in
 [the mathematical contract](docs/mathematical_contract.md). See the
-[API guide](docs/api.md) and [Phase 2 tutorial](docs/tutorial.md) before using
-the estimator.
+[API guide](docs/api.md), [stopping guide](docs/stopping.md), and
+[Phase 2 tutorial](docs/tutorial.md) before using the estimator.
 
 ## Development
 
@@ -92,6 +122,11 @@ python -m twine check dist/*
 
 Phase reports and exact validation commands are stored under
 [`docs/phases/`](docs/phases/).
+
+The non-CI eggbox comparison in
+[`benchmarks/compare_stopping_policies.py`](benchmarks/compare_stopping_policies.py)
+records repeated-seed accuracy, cost, failure-rate, and speed-up summaries for
+the legacy, looser remaining-fraction, and hybrid policies.
 
 ## License
 

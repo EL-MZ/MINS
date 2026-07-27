@@ -21,6 +21,8 @@ Dependency direction is inward toward small protocols:
 - `constrained.py` performs unbiased constrained rejection and caches model
   evaluations.
 - `quadrature.py` contains pure expected-volume evidence arithmetic.
+- `stopping.py` contains immutable policies, pure stopping metrics, and
+  criterion combination.
 - `sampler.py` coordinates iteration and owns no density or plotting details.
 - `results.py` validates and freezes complete run outputs.
 - `progress.py` adapts optional tqdm or user callbacks to sampler snapshots.

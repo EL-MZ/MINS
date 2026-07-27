@@ -66,12 +66,15 @@ class _TqdmProgress:
             "eff": f"{info['efficiency_percent']:.1f}%",
             "logZ": f"{info['logz']:.3f}",
             "logZerr": f"{info['logzerr']:.3f}",
-            "H": f"{info['information']:.2f}",
-            "rem/tol": (
-                f"{info['remaining_fraction']:.2e}/{info['stopping_tolerance']:.1e}"
+            "liveErr": f"{info['live_logz_error']:.2e}",
+            "rem": f"{info['remaining_fraction']:.2e}",
+            "ESSlive": f"{info['live_ess']:.1f}",
+            "stop": (
+                f"{int(info['stopping_streak'])}/{int(info['stopping_consecutive'])}"
             ),
-            "logPsi": f"{info['threshold']:.3f}",
         }
+        if "criterion_logz_stability_met" in info:
+            self._postfix["stable"] = f"{info['logz_stability']:.2e}"
         self._bar.set_postfix(self._postfix, refresh=False)
         self._bar.update(max(0, iteration - self._bar.n))
 

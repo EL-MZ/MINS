@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Real
 from typing import Literal
 
+import numpy as np
+
 from .exceptions import ConfigurationError
+from .stopping import (
+    StoppingCriterionConfig,
+    StoppingPolicy,
+    validate_stopping_policy_for_n_live,
+)
 
 TiePolicy = Literal["strict", "randomized_plateau"]
+
+
+def _validate_dlogz(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ConfigurationError("dlogz must satisfy 0 < dlogz < 1")
+    number = float(value)
+    if not np.isfinite(number) or not 0.0 < number < 1.0:
+        raise ConfigurationError("dlogz must satisfy 0 < dlogz < 1")
+    return number
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +36,10 @@ class MINSConfig:
     n_live
         Number of live points. Must be at least two.
     dlogz
-        Relative estimated-live-evidence stopping tolerance in ``(0, 1)``.
+        Optional legacy remaining-evidence-fraction tolerance in ``(0, 1)``.
+    stopping
+        Resolved immutable stopping policy. Supplying this together with
+        ``dlogz`` is invalid.
     proposal_batch_size
         Number of independent Morph draws evaluated per rejection batch.
     max_iterations
@@ -35,7 +55,8 @@ class MINSConfig:
     """
 
     n_live: int
-    dlogz: float = 1.0e-3
+    dlogz: float | None = None
+    stopping: StoppingPolicy | None = None
     proposal_batch_size: int = 64
     max_iterations: int = 10_000
     max_proposals_per_replacement: int = 100_000
@@ -51,8 +72,29 @@ class MINSConfig:
             or self.n_live < 2
         ):
             raise ConfigurationError("n_live must be an integer >= 2")
-        if not 0.0 < self.dlogz < 1.0:
-            raise ConfigurationError("dlogz must satisfy 0 < dlogz < 1")
+        if self.dlogz is not None and self.stopping is not None:
+            raise ConfigurationError("dlogz and stopping cannot both be supplied")
+        dlogz = self.dlogz
+        stopping = self.stopping
+        if dlogz is None and stopping is None:
+            dlogz = 1.0e-3
+        if dlogz is not None:
+            dlogz = _validate_dlogz(dlogz)
+            stopping = StoppingPolicy(
+                criteria=(
+                    StoppingCriterionConfig(
+                        name="remaining_fraction",
+                        tolerance=dlogz,
+                    ),
+                )
+            )
+        elif not isinstance(stopping, StoppingPolicy):
+            raise ConfigurationError("stopping must be a StoppingPolicy")
+        if stopping is None:  # pragma: no cover - resolution above is exhaustive
+            raise ConfigurationError("a stopping policy could not be resolved")
+        validate_stopping_policy_for_n_live(stopping, self.n_live)
+        object.__setattr__(self, "dlogz", dlogz)
+        object.__setattr__(self, "stopping", stopping)
         for name in (
             "proposal_batch_size",
             "max_iterations",

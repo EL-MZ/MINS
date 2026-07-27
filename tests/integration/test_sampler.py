@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 from tests.helpers import StandardNormalProposal
 
-from mins import CallableModel, MINSampler
+from mins import (
+    CallableModel,
+    ConfigurationError,
+    MINSampler,
+    StoppingCriterionConfig,
+    StoppingPolicy,
+)
 from mins.diagnostics import summarize
 
 pytestmark = pytest.mark.integration
@@ -44,6 +50,132 @@ def test_constant_integrand_end_to_end_with_randomized_plateau() -> None:
     assert np.sum(result.posterior_weights) == pytest.approx(1.0)
     assert not result.dead_points.flags.writeable
     assert summarize(result).thresholds_monotone
+
+
+def test_hybrid_stopping_policy_succeeds_and_records_complete_state() -> None:
+    model, proposal = _constant_problem()
+    snapshots: list[dict[str, float | int]] = []
+    policy = StoppingPolicy(
+        criteria=(
+            StoppingCriterionConfig("live_logz_error", 5.0e-3),
+            StoppingCriterionConfig("remaining_fraction", 0.5),
+            StoppingCriterionConfig("logz_stability", 5.0e-3),
+        ),
+        mode="all",
+        consecutive=3,
+        min_iterations=10,
+        stability_window=10,
+    )
+    result = MINSampler(
+        model,
+        proposal,
+        n_live=20,
+        rng=81,
+        tie_policy="randomized_plateau",
+    ).run(
+        stopping=policy,
+        max_iterations=200,
+        progress=lambda info: snapshots.append(dict(info)),
+    )
+    assert result.success
+    assert result.termination_reason == "stopping_criteria"
+    assert result.logz == pytest.approx(np.log(2.5), abs=1.0e-12)
+    assert result.config.dlogz is None
+    assert result.config.stopping == policy
+    assert result.history.live_logz_error[-1] <= 5.0e-3
+    assert result.history.remaining_fraction[-1] <= 0.5
+    assert result.history.logz_stability[-1] <= 5.0e-3
+    assert result.history.stopping_streak[-1] >= policy.consecutive
+    expected_flags = {
+        "criterion_live_logz_error_met",
+        "criterion_remaining_fraction_met",
+        "criterion_logz_stability_met",
+    }
+    assert expected_flags <= snapshots[-1].keys()
+    assert all(snapshots[-1][key] == 1 for key in expected_flags)
+    assert "criterion_live_ess_met" not in snapshots[-1]
+    for name in (
+        "live_ess",
+        "live_mean_rse",
+        "live_logz_error",
+        "logz_stability",
+        "stopping_streak",
+    ):
+        values = getattr(result.history, name)
+        assert values.shape == (result.niter,)
+        assert not values.flags.writeable
+    diagnostics = summarize(result)
+    assert diagnostics.final_live_logz_error == pytest.approx(
+        result.history.live_logz_error[-1]
+    )
+    assert diagnostics.final_stopping_streak == result.history.stopping_streak[-1]
+
+
+def test_all_waits_for_every_criterion_while_any_stops_on_first() -> None:
+    model, proposal = _constant_problem()
+    criteria = (
+        StoppingCriterionConfig("live_logz_error", 1.0e-12),
+        StoppingCriterionConfig("remaining_fraction", 0.5),
+    )
+    all_result = MINSampler(
+        model,
+        proposal,
+        n_live=20,
+        rng=82,
+        tie_policy="randomized_plateau",
+    ).run(
+        stopping=StoppingPolicy(criteria=criteria, mode="all"),
+        max_iterations=100,
+    )
+    any_result = MINSampler(
+        model,
+        proposal,
+        n_live=20,
+        rng=82,
+        tie_policy="randomized_plateau",
+    ).run(
+        stopping=StoppingPolicy(criteria=criteria, mode="any"),
+        max_iterations=100,
+    )
+    assert all_result.success
+    assert any_result.success
+    assert all_result.niter == 14
+    assert any_result.niter == 1
+
+
+def test_hard_limit_remains_failure_after_only_one_all_criterion_passes() -> None:
+    model, proposal = _constant_problem()
+    result = MINSampler(
+        model,
+        proposal,
+        n_live=20,
+        rng=83,
+        tie_policy="randomized_plateau",
+    ).run(
+        stopping=StoppingPolicy(
+            criteria=(
+                StoppingCriterionConfig("live_logz_error", 1.0e-12),
+                StoppingCriterionConfig("remaining_fraction", 1.0e-8),
+            ),
+            mode="all",
+        ),
+        max_iterations=3,
+    )
+    assert not result.success
+    assert result.termination_reason == "max_iterations"
+    assert result.history.live_logz_error[-1] == 0.0
+    assert result.history.stopping_streak[-1] == 0
+
+
+def test_run_rejects_simultaneous_legacy_and_policy_arguments() -> None:
+    model, proposal = _constant_problem()
+    with pytest.raises(ConfigurationError, match="dlogz and stopping"):
+        MINSampler(model, proposal, n_live=10, rng=84).run(
+            dlogz=0.1,
+            stopping=StoppingPolicy(
+                criteria=(StoppingCriterionConfig("logzerr", 0.1),)
+            ),
+        )
 
 
 def test_same_seed_reproduces_scientific_result() -> None:
@@ -89,6 +221,10 @@ def test_strict_plateau_returns_partial_failed_result() -> None:
     assert result.niter == 0
     assert result.n_proposals == 12
     assert result.logz == pytest.approx(np.log(2.5), abs=1e-12)
+    diagnostics = summarize(result)
+    assert np.isnan(diagnostics.final_remaining_fraction)
+    assert np.isnan(diagnostics.final_live_ess)
+    assert diagnostics.final_stopping_streak == 0
 
 
 def test_iteration_limit_is_not_scientific_success() -> None:
@@ -178,6 +314,13 @@ def test_progress_callback_receives_standard_nested_sampling_information() -> No
         "logzerr",
         "information",
         "remaining_fraction",
+        "live_ess",
+        "live_mean_rse",
+        "live_logz_error",
+        "logz_stability",
+        "stopping_streak",
+        "stopping_consecutive",
+        "criterion_remaining_fraction_met",
         "stopping_tolerance",
         "threshold",
         "elapsed_seconds",

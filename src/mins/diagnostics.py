@@ -19,6 +19,12 @@ class RunDiagnostics:
     maximum_proposals_per_replacement: int
     thresholds_monotone: bool
     conservative_log_remaining: float
+    final_remaining_fraction: float
+    final_live_ess: float
+    final_live_mean_rse: float
+    final_live_logz_error: float
+    final_logz_stability: float
+    final_stopping_streak: int
 
 
 def posterior_ess(result: MINSResult) -> float:
@@ -35,6 +41,20 @@ def summarize(result: MINSResult) -> RunDiagnostics:
     maximum_proposals = int(np.max(result.history.proposals)) if result.niter else 0
     log_x = -result.niter / result.nlive
     conservative = log_x + float(np.max(result.final_live_log_psi))
+    if result.niter:
+        final_remaining_fraction = float(result.history.remaining_fraction[-1])
+        final_live_ess = float(result.history.live_ess[-1])
+        final_live_mean_rse = float(result.history.live_mean_rse[-1])
+        final_live_logz_error = float(result.history.live_logz_error[-1])
+        final_logz_stability = float(result.history.logz_stability[-1])
+        final_stopping_streak = int(result.history.stopping_streak[-1])
+    else:
+        final_remaining_fraction = float("nan")
+        final_live_ess = float("nan")
+        final_live_mean_rse = float("nan")
+        final_live_logz_error = float("nan")
+        final_logz_stability = float("nan")
+        final_stopping_streak = 0
     return RunDiagnostics(
         posterior_ess=ess,
         relative_posterior_ess=ess / n_weighted,
@@ -42,4 +62,10 @@ def summarize(result: MINSResult) -> RunDiagnostics:
         maximum_proposals_per_replacement=maximum_proposals,
         thresholds_monotone=bool(np.all(np.diff(result.dead_log_psi) >= 0.0)),
         conservative_log_remaining=conservative,
+        final_remaining_fraction=final_remaining_fraction,
+        final_live_ess=final_live_ess,
+        final_live_mean_rse=final_live_mean_rse,
+        final_live_logz_error=final_live_logz_error,
+        final_logz_stability=final_logz_stability,
+        final_stopping_streak=final_stopping_streak,
     )

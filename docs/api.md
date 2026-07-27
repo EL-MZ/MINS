@@ -79,6 +79,34 @@ result = sampler.run(
 )
 ```
 
+`dlogz` and `stopping` are mutually exclusive. Omitting both preserves the
+legacy `dlogz=1e-3` behavior. The multi-criterion API uses immutable
+`StoppingCriterionConfig` and `StoppingPolicy` values:
+
+```python
+from mins import StoppingCriterionConfig, StoppingPolicy
+
+stopping = StoppingPolicy(
+    criteria=(
+        StoppingCriterionConfig("live_logz_error", 5e-3),
+        StoppingCriterionConfig("remaining_fraction", 5e-2),
+        StoppingCriterionConfig("logz_stability", 5e-3),
+    ),
+    mode="all",
+    consecutive=3,
+    min_iterations=10,
+    stability_window=10,
+)
+result = sampler.run(
+    stopping=stopping,
+    max_iterations=20_000,
+)
+```
+
+The resolved policy is retained in `result.config.stopping`. See
+[Stopping criteria](stopping.md) for metric definitions, custom `"all"` and
+`"any"` policies, persistence rules, and limitations.
+
 The constructor validates dimensions and owns the supplied generator. Live
 points are new proposal draws. At every iteration, ordering and rejection use
 `log_psi = log_likelihood + log_prior - log_q`.
@@ -94,14 +122,16 @@ Progress is silent by default. `progress=True` enables an optional
 - iteration and `n_live`;
 - likelihood calls and constrained-proposal efficiency;
 - current total `logZ` and theoretical `logZerr`;
-- current information in nats;
-- remaining-evidence fraction and stopping tolerance;
-- the discarded `logPsi` threshold.
+- live-set log-evidence error and remaining-evidence fraction;
+- live-point ESS;
+- the current stopping streak and required consecutive count.
 
 A custom callable can be passed instead of `True`. It receives a mapping after
-every completed iteration with the displayed quantities plus dead/live
-evidence, per-iteration proposal counts, live `logPsi` range, and elapsed time.
-Library code does not otherwise print, display, or write files.
+every completed iteration with the displayed quantities plus
+`live_mean_rse`, `logz_stability`, dead/live evidence, per-iteration proposal
+counts, live `logPsi` range, and elapsed time. It also receives integer met
+flags named `criterion_<name>_met` for each enabled criterion. Library code
+does not otherwise print, display, or write files.
 
 ## Result
 
@@ -134,13 +164,20 @@ highest-fidelity posterior summaries.
 
 `RunHistory` stores every completed threshold, volume interval, cumulative
 dead/live/total log evidence, information, `logzerr`, remaining fraction, live
-pseudo-likelihood range, calls, proposal counts, acceptance fraction, and
-elapsed time.
+pseudo-likelihood ESS, live-mean RSE, live log-evidence error, log-evidence
+stability, stopping streak, live pseudo-likelihood range, calls, proposal
+counts, acceptance fraction, and elapsed time. Every array is read-only and
+has shape `(niter,)`; early `logz_stability` entries are `NaN` until its exact
+window is available.
 
 ## Failure semantics
 
-The scientific termination reason is `remaining_evidence`, the only reason
-with `success=True`. Hard stops include:
+Scientific termination reasons are:
+
+- `remaining_evidence` for the legacy `dlogz` path;
+- `stopping_criteria` for an explicit `StoppingPolicy`.
+
+Both have `success=True`. Hard stops include:
 
 - `max_iterations`;
 - `max_likelihood_calls`;
@@ -155,8 +192,9 @@ exceptions because no statistically coherent result can be formed.
 ## Diagnostics and plots
 
 `mins.diagnostics.summarize(result)` reports posterior ESS, proposal acceptance,
-maximum proposals per replacement, threshold monotonicity, and the conservative
-max-live remainder.
+maximum proposals per replacement, threshold monotonicity, the separate
+conservative max-live remainder, and the final values of every stopping
+diagnostic and streak.
 
 `plot_run`, `plot_weight_health`, and `plot_posterior_1d` return Matplotlib
 objects. They never call `show` or save files.

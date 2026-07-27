@@ -15,6 +15,7 @@ from .model import CallableModel, Model
 from .proposals import MorphMetadata, MorphProposal, Proposal
 from .results import MINSResult, RunHistory
 from .sampler import MINSampler
+from .stopping import StoppingCriterionConfig, StoppingPolicy
 
 __all__ = [
     "CallableModel",
@@ -33,5 +34,7 @@ __all__ = [
     "Proposal",
     "ProposalSupportError",
     "RunHistory",
+    "StoppingCriterionConfig",
+    "StoppingPolicy",
     "__version__",
 ]

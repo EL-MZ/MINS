@@ -27,6 +27,12 @@ from .quadrature import (
     update_log_weighted_mean,
 )
 from .results import MINSResult, RunHistory
+from .stopping import (
+    SCIENTIFIC_TERMINATION_REASONS,
+    StoppingPolicy,
+    calculate_stopping_metrics,
+    evaluate_stopping_policy,
+)
 
 
 def _as_generator(
@@ -120,7 +126,8 @@ class MINSampler:
     def run(
         self,
         *,
-        dlogz: float = 1.0e-3,
+        dlogz: float | None = None,
+        stopping: StoppingPolicy | None = None,
         max_iterations: int = 10_000,
         max_proposals_per_replacement: int = 100_000,
         max_likelihood_calls: int | None = None,
@@ -132,7 +139,11 @@ class MINSampler:
         Parameters
         ----------
         dlogz
-            Relative estimated-live-evidence stopping tolerance.
+            Legacy remaining-evidence-fraction stopping tolerance. When both
+            ``dlogz`` and ``stopping`` are omitted, this defaults to ``1e-3``.
+        stopping
+            Optional multi-criterion scientific stopping policy. It cannot be
+            supplied together with ``dlogz``.
         max_iterations
             Hard limit on completed replacements.
         max_proposals_per_replacement
@@ -166,6 +177,7 @@ class MINSampler:
         config = MINSConfig(
             n_live=self.n_live,
             dlogz=dlogz,
+            stopping=stopping,
             proposal_batch_size=self.proposal_batch_size,
             max_iterations=max_iterations,
             max_proposals_per_replacement=max_proposals_per_replacement,
@@ -173,6 +185,9 @@ class MINSampler:
             max_wall_time=max_wall_time,
             tie_policy=self.tie_policy,
         )
+        stopping_policy = config.stopping
+        if stopping_policy is None:  # pragma: no cover - config always resolves it
+            raise RuntimeError("MINSConfig did not resolve a stopping policy")
         progress_reporter = create_progress_reporter(
             progress,
             max_iterations=config.max_iterations,
@@ -218,6 +233,11 @@ class MINSampler:
         history_information: list[float] = []
         history_logzerr: list[float] = []
         history_remaining_fraction: list[float] = []
+        history_live_ess: list[float] = []
+        history_live_mean_rse: list[float] = []
+        history_live_logz_error: list[float] = []
+        history_logz_stability: list[float] = []
+        history_stopping_streak: list[int] = []
         history_live_min: list[float] = []
         history_live_median: list[float] = []
         history_live_max: list[float] = []
@@ -230,6 +250,7 @@ class MINSampler:
         n_proposals = 0
         logz_dead = -np.inf
         dead_log_psi_mean = 0.0
+        stopping_streak = 0
         termination_reason = ""
         while not termination_reason:
             if niter >= config.max_iterations:
@@ -317,14 +338,37 @@ class MINSampler:
                 logz_total=logz_total,
             )
             logzerr = float(np.sqrt(information / self.n_live))
-            remaining_fraction = float(np.exp(logz_live - logz_total))
+            stability_history = (
+                *history_logz_total[-(stopping_policy.stability_window - 1) :],
+                logz_total,
+            )
+            stopping_metrics = calculate_stopping_metrics(
+                live_log_psi=live_log_psi,
+                logz_live=logz_live,
+                logz_total=logz_total,
+                logz_history=stability_history,
+                logzerr=logzerr,
+                stability_window=stopping_policy.stability_window,
+            )
+            stopping_decision = evaluate_stopping_policy(
+                metrics=stopping_metrics,
+                policy=stopping_policy,
+                niter=niter,
+                previous_streak=stopping_streak,
+            )
+            stopping_streak = stopping_decision.streak
             elapsed = time.monotonic() - start
             history_logz_dead.append(logz_dead)
             history_logz_live.append(logz_live)
             history_logz_total.append(logz_total)
             history_information.append(information)
             history_logzerr.append(logzerr)
-            history_remaining_fraction.append(remaining_fraction)
+            history_remaining_fraction.append(stopping_metrics.remaining_fraction)
+            history_live_ess.append(stopping_metrics.live_ess)
+            history_live_mean_rse.append(stopping_metrics.live_mean_rse)
+            history_live_logz_error.append(stopping_metrics.live_logz_error)
+            history_logz_stability.append(stopping_metrics.logz_stability)
+            history_stopping_streak.append(stopping_streak)
             history_live_min.append(float(np.min(live_log_psi)))
             history_live_median.append(float(np.median(live_log_psi)))
             history_live_max.append(float(np.max(live_log_psi)))
@@ -333,31 +377,43 @@ class MINSampler:
             history_acceptance.append(niter / n_proposals)
             history_elapsed.append(elapsed)
 
-            progress_reporter.update(
-                {
-                    "iteration": niter,
-                    "max_iterations": config.max_iterations,
-                    "nlive": config.n_live,
-                    "likelihood_calls": evaluator.n_likelihood_calls,
-                    "proposals": n_proposals,
-                    "proposals_iteration": attempt.n_proposed,
-                    "efficiency_percent": 100.0 * niter / n_proposals,
-                    "logz": logz_total,
-                    "logzerr": logzerr,
-                    "information": information,
-                    "logz_dead": logz_dead,
-                    "logz_live": logz_live,
-                    "remaining_fraction": remaining_fraction,
-                    "stopping_tolerance": config.dlogz,
-                    "threshold": threshold,
-                    "live_min_log_psi": history_live_min[-1],
-                    "live_median_log_psi": history_live_median[-1],
-                    "live_max_log_psi": history_live_max[-1],
-                    "elapsed_seconds": elapsed,
-                }
-            )
-            if logz_live - logz_total < np.log(config.dlogz):
-                termination_reason = "remaining_evidence"
+            progress_info: dict[str, float | int] = {
+                "iteration": niter,
+                "max_iterations": config.max_iterations,
+                "nlive": config.n_live,
+                "likelihood_calls": evaluator.n_likelihood_calls,
+                "proposals": n_proposals,
+                "proposals_iteration": attempt.n_proposed,
+                "efficiency_percent": 100.0 * niter / n_proposals,
+                "logz": logz_total,
+                "logzerr": logzerr,
+                "information": information,
+                "logz_dead": logz_dead,
+                "logz_live": logz_live,
+                "remaining_fraction": stopping_metrics.remaining_fraction,
+                "live_ess": stopping_metrics.live_ess,
+                "live_mean_rse": stopping_metrics.live_mean_rse,
+                "live_logz_error": stopping_metrics.live_logz_error,
+                "logz_stability": stopping_metrics.logz_stability,
+                "stopping_streak": stopping_streak,
+                "stopping_consecutive": stopping_policy.consecutive,
+                "threshold": threshold,
+                "live_min_log_psi": history_live_min[-1],
+                "live_median_log_psi": history_live_median[-1],
+                "live_max_log_psi": history_live_max[-1],
+                "elapsed_seconds": elapsed,
+            }
+            if config.dlogz is not None:
+                progress_info["stopping_tolerance"] = config.dlogz
+            for evaluation in stopping_decision.evaluations:
+                progress_info[f"criterion_{evaluation.name}_met"] = int(evaluation.met)
+            progress_reporter.update(progress_info)
+            if stopping_decision.should_stop:
+                termination_reason = (
+                    "remaining_evidence"
+                    if config.dlogz is not None
+                    else "stopping_criteria"
+                )
 
         progress_reporter.close(termination_reason)
         final_log_x = -niter / self.n_live
@@ -379,6 +435,11 @@ class MINSampler:
             information=np.asarray(history_information),
             logzerr=np.asarray(history_logzerr),
             remaining_fraction=np.asarray(history_remaining_fraction),
+            live_ess=np.asarray(history_live_ess),
+            live_mean_rse=np.asarray(history_live_mean_rse),
+            live_logz_error=np.asarray(history_live_logz_error),
+            logz_stability=np.asarray(history_logz_stability),
+            stopping_streak=np.asarray(history_stopping_streak, dtype=np.int64),
             live_min_log_psi=np.asarray(history_live_min),
             live_median_log_psi=np.asarray(history_live_median),
             live_max_log_psi=np.asarray(history_live_max),
@@ -387,7 +448,7 @@ class MINSampler:
             acceptance_fraction=np.asarray(history_acceptance),
             elapsed_seconds=np.asarray(history_elapsed),
         )
-        success = termination_reason == "remaining_evidence"
+        success = termination_reason in SCIENTIFIC_TERMINATION_REASONS
         warnings = [
             "Phase 2 uses a fixed non-defensive Morph pseudo-prior; missing "
             "support can bias logz and is not automatically repaired."

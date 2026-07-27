@@ -11,6 +11,7 @@ from scipy.special import logsumexp
 
 from .config import MINSConfig
 from .quadrature import live_log_contributions
+from .stopping import SCIENTIFIC_TERMINATION_REASONS
 
 
 def _readonly(
@@ -40,6 +41,11 @@ class RunHistory:
     information: NDArray[np.float64]
     logzerr: NDArray[np.float64]
     remaining_fraction: NDArray[np.float64]
+    live_ess: NDArray[np.float64]
+    live_mean_rse: NDArray[np.float64]
+    live_logz_error: NDArray[np.float64]
+    logz_stability: NDArray[np.float64]
+    stopping_streak: NDArray[np.int64]
     live_min_log_psi: NDArray[np.float64]
     live_median_log_psi: NDArray[np.float64]
     live_max_log_psi: NDArray[np.float64]
@@ -50,7 +56,12 @@ class RunHistory:
 
     def __post_init__(self) -> None:
         lengths: set[int] = set()
-        integer_fields = {"iteration", "proposals", "likelihood_calls"}
+        integer_fields = {
+            "iteration",
+            "proposals",
+            "likelihood_calls",
+            "stopping_streak",
+        }
         for field in fields(self):
             values = getattr(self, field.name)
             dtype = np.int64 if field.name in integer_fields else np.float64
@@ -179,9 +190,10 @@ class MINSResult:
         )
         if not np.isclose(recomputed, self.logz, rtol=1e-12, atol=1e-12):
             raise ValueError("stored logz cannot be recomputed from result arrays")
-        if self.success != (self.termination_reason == "remaining_evidence"):
+        expected_success = self.termination_reason in SCIENTIFIC_TERMINATION_REASONS
+        if self.success != expected_success:
             raise ValueError(
-                "success must correspond to remaining_evidence termination"
+                "success must correspond to scientific stopping termination"
             )
 
     @property

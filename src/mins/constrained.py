@@ -20,25 +20,25 @@ from .proposals import Proposal
 
 @dataclass(frozen=True, slots=True)
 class EvaluatedPoint:
-    """One proposal with all cached transformed-target quantities."""
+    """One candidate with quantities tied to the fixed importance Morph."""
 
     theta: NDArray[np.float64]
     log_likelihood: float
     log_prior: float
-    log_q: float
-    log_psi: float
+    log_q0: float
+    log_psi0: float
     tie_breaker: float
 
 
 @dataclass(frozen=True, slots=True)
 class EvaluatedBatch:
-    """A validated batch of cached model and proposal evaluations."""
+    """A validated batch evaluated against the fixed importance Morph."""
 
     theta: NDArray[np.float64]
     log_likelihood: NDArray[np.float64]
     log_prior: NDArray[np.float64]
-    log_q: NDArray[np.float64]
-    log_psi: NDArray[np.float64]
+    log_q0: NDArray[np.float64]
+    log_psi0: NDArray[np.float64]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,19 +61,20 @@ class ConstrainedAttempt:
 
 
 class BatchEvaluator:
-    """Validate and count model/proposal evaluations.
+    """Validate and count model/fixed-importance evaluations.
 
     ``n_likelihood_calls`` counts evaluated parameter points rather than Python
     function invocations, including vectorized batches.
     """
 
-    def __init__(self, model: Model, proposal: Proposal) -> None:
-        if model.ndim != proposal.ndim:
+    def __init__(self, model: Model, importance_morph: Proposal) -> None:
+        if model.ndim != importance_morph.ndim:
             raise ValueError(
-                f"model ndim {model.ndim} does not match proposal ndim {proposal.ndim}"
+                f"model ndim {model.ndim} does not match importance Morph ndim "
+                f"{importance_morph.ndim}"
             )
         self.model = model
-        self.proposal = proposal
+        self.importance_morph = importance_morph
         self.ndim = model.ndim
         self.n_likelihood_calls = 0
         self.n_prior_calls = 0
@@ -84,7 +85,7 @@ class BatchEvaluator:
         """Evaluate and validate an ``(n, ndim)`` batch.
 
         ``-inf`` likelihood or prior values are valid zero-density values.
-        A finite target numerator paired with ``log_q == -inf`` is a fatal
+        A finite target numerator paired with ``log_q0 == -inf`` is a fatal
         support error.
         """
         points = validate_points(theta, self.ndim)
@@ -93,12 +94,12 @@ class BatchEvaluator:
         self.n_likelihood_calls += n_points
         log_prior = np.asarray(self.model.log_prior(points), dtype=float)
         self.n_prior_calls += n_points
-        log_q = np.asarray(self.proposal.log_prob(points), dtype=float)
+        log_q0 = np.asarray(self.importance_morph.log_prob(points), dtype=float)
 
         for name, values, error_type in (
             ("log_likelihood", log_likelihood, InvalidModelOutput),
             ("log_prior", log_prior, InvalidModelOutput),
-            ("log_q", log_q, InvalidProposalOutput),
+            ("log_q0", log_q0, InvalidProposalOutput),
         ):
             if values.shape != (n_points,):
                 raise error_type(
@@ -111,19 +112,19 @@ class BatchEvaluator:
 
         numerator = log_likelihood + log_prior
         finite_numerator = np.isfinite(numerator)
-        support_failure = finite_numerator & np.isneginf(log_q)
+        support_failure = finite_numerator & np.isneginf(log_q0)
         if np.any(support_failure):
             first = int(np.flatnonzero(support_failure)[0])
             raise ProposalSupportError(
                 "proposal support failure: finite log_likelihood + log_prior "
-                f"with log_q == -inf at batch row {first}"
+                f"with log_q0 == -inf at batch row {first}"
             )
 
-        log_psi = np.full(n_points, -np.inf, dtype=float)
-        valid = finite_numerator & np.isfinite(log_q)
-        log_psi[valid] = numerator[valid] - log_q[valid]
-        if np.any(np.isnan(log_psi)) or np.any(np.isposinf(log_psi)):
-            raise InvalidModelOutput("log_psi is NaN or +infinity")
+        log_psi0 = np.full(n_points, -np.inf, dtype=float)
+        valid = finite_numerator & np.isfinite(log_q0)
+        log_psi0[valid] = numerator[valid] - log_q0[valid]
+        if np.any(np.isnan(log_psi0)) or np.any(np.isposinf(log_psi0)):
+            raise InvalidModelOutput("log_psi0 is NaN or +infinity")
 
         self.outside_prior += int(np.count_nonzero(np.isneginf(log_prior)))
         self.zero_likelihood += int(np.count_nonzero(np.isneginf(log_likelihood)))
@@ -131,8 +132,8 @@ class BatchEvaluator:
             theta=points,
             log_likelihood=log_likelihood,
             log_prior=log_prior,
-            log_q=log_q,
-            log_psi=log_psi,
+            log_q0=log_q0,
+            log_psi0=log_psi0,
         )
 
 
@@ -156,7 +157,7 @@ def validate_proposal_sample(
 def draw_constrained(
     *,
     evaluator: BatchEvaluator,
-    proposal: Proposal,
+    proposal_morph: Proposal,
     threshold: float,
     threshold_tie_breaker: float,
     tie_policy: TiePolicy,
@@ -166,7 +167,7 @@ def draw_constrained(
     max_likelihood_calls: int | None,
     deadline: float | None,
 ) -> ConstrainedAttempt:
-    """Draw from ``q`` under a strict or lexicographic constraint.
+    """Draw from the active proposal under a fixed-``q0`` constraint.
 
     Independent proposals are scanned in generation order; the first valid
     proposal is accepted. No maximum-of-batch selection is performed.
@@ -194,17 +195,17 @@ def draw_constrained(
             remaining_global,
         )
         points = validate_proposal_sample(
-            proposal.sample(current_size, rng),
+            proposal_morph.sample(current_size, rng),
             n=current_size,
             ndim=evaluator.ndim,
         )
         batch = evaluator.evaluate(points)
         tie_breakers = rng.random(current_size)
         if tie_policy == "strict":
-            valid = batch.log_psi > threshold
+            valid = batch.log_psi0 > threshold
         else:
-            valid = (batch.log_psi > threshold) | (
-                (batch.log_psi == threshold) & (tie_breakers > threshold_tie_breaker)
+            valid = (batch.log_psi0 > threshold) | (
+                (batch.log_psi0 == threshold) & (tie_breakers > threshold_tie_breaker)
             )
         valid_indices = np.flatnonzero(valid)
         n_proposed += current_size
@@ -215,8 +216,8 @@ def draw_constrained(
                 theta=np.array(batch.theta[index], copy=True),
                 log_likelihood=float(batch.log_likelihood[index]),
                 log_prior=float(batch.log_prior[index]),
-                log_q=float(batch.log_q[index]),
-                log_psi=float(batch.log_psi[index]),
+                log_q0=float(batch.log_q0[index]),
+                log_psi0=float(batch.log_psi0[index]),
                 tie_breaker=float(tie_breakers[index]),
             )
             return ConstrainedAttempt(

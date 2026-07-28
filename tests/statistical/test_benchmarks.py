@@ -37,8 +37,8 @@ def test_analytic_gaussian_repeated_seed_aggregate(
     second_moments = []
     for seed in (11, 12, 13):
         result = MINSampler(
-            benchmark.model(),
-            proposal,
+            model=benchmark.model(),
+            importance_morph=proposal,
             n_live=25,
             rng=seed,
             proposal_batch_size=16,
@@ -75,8 +75,8 @@ def test_direct_importance_cross_check(
     )
     direct_logz = float(logsumexp(log_weights) - np.log(len(theta)))
     nested = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=25,
         rng=44,
         proposal_batch_size=16,
@@ -90,11 +90,43 @@ def test_direct_importance_cross_check(
     assert nested.logz == pytest.approx(direct_logz, abs=0.06)
 
 
+def test_adaptive_morph_keeps_fixed_q0_fields_and_records_refits(
+    gaussian_problem: tuple[GaussianBenchmark, MorphProposal],
+) -> None:
+    benchmark, importance_morph = gaussian_problem
+    model = benchmark.model()
+    result = MINSampler(
+        model=model,
+        importance_morph=importance_morph,
+        proposal_scheme="adaptive_morph",
+        proposal_update_interval=25,
+        n_live=25,
+        rng=45,
+        proposal_batch_size=16,
+    ).run(
+        dlogz=0.08,
+        max_iterations=400,
+        max_proposals_per_replacement=5_000,
+    )
+
+    assert result.success
+    assert result.proposal_updates
+    assert all(record.success for record in result.proposal_updates)
+    assert all(record.n_training == result.nlive for record in result.proposal_updates)
+    assert np.isfinite(result.logz)
+    assert np.all(np.diff(result.dead_log_psi0) >= 0.0)
+    expected_log_q0 = importance_morph.log_prob(result.all_points)
+    np.testing.assert_allclose(
+        np.concatenate((result.dead_log_q0, result.final_live_log_q0)),
+        expected_log_q0,
+    )
+
+
 def test_peak_plateau_regression_uses_explicit_tie_policy() -> None:
     benchmark = PeakPlateauBenchmark()
     result = MINSampler(
-        benchmark.model(),
-        UniformBoxProposal(),
+        model=benchmark.model(),
+        importance_morph=UniformBoxProposal(),
         n_live=40,
         rng=2026,
         proposal_batch_size=32,
@@ -106,7 +138,7 @@ def test_peak_plateau_regression_uses_explicit_tie_policy() -> None:
     )
     assert result.success
     assert result.logz == pytest.approx(benchmark.logz, abs=0.12)
-    assert np.all(np.diff(result.dead_log_psi) >= 0.0)
+    assert np.all(np.diff(result.dead_log_psi0) >= 0.0)
     assert "randomized_plateau" in " ".join(result.warnings)
 
 
@@ -121,8 +153,8 @@ def test_grouped_morph_gaussian_shell_regression() -> None:
         kde_bw="silverman",
     )
     result = MINSampler(
-        benchmark.model(),
-        proposal,
+        model=benchmark.model(),
+        importance_morph=proposal,
         n_live=25,
         rng=72,
         proposal_batch_size=16,
@@ -132,6 +164,6 @@ def test_grouped_morph_gaussian_shell_regression() -> None:
         max_proposals_per_replacement=10_000,
     )
     assert result.success
-    assert np.all(np.isfinite(result.final_live_log_q))
+    assert np.all(np.isfinite(result.final_live_log_q0))
     assert result.logz == pytest.approx(benchmark.logz, abs=0.3)
-    assert np.all(np.diff(result.dead_log_psi) >= 0.0)
+    assert np.all(np.diff(result.dead_log_psi0) >= 0.0)

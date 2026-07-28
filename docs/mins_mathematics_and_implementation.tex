@@ -177,37 +177,44 @@ For an absolute evidence calculation, \code{log_likelihood_fn} must likewise
 represent the intended likelihood including any parameter-independent
 normalization terms that would matter when comparing models.
 
-\subsection{Fixed Morph proposal and pseudo-likelihood}
+\subsection{Fixed importance Morph and pseudo-likelihood}
 
-The posterior training array is used to fit one normalized proposal density
-\(q(\theta)\).  In the standard path, \(q\) is a \MorphZ{}
+The posterior training array is used to fit one normalized importance density
+\(q_0(\theta)\).  In the standard path, \(q_0\) is a \MorphZ{}
 \code{GroupKDE}; a custom object satisfying the same proposal protocol may
 also be used.
 
 The implementation defines
 \begin{equation}
-  \Psi(\theta)
-  = \frac{L(\theta)\pi(\theta)}{q(\theta)},\qquad
-  \log\Psi(\theta)
-  = \log L(\theta)+\log\pi(\theta)-\log q(\theta).
+  \Psi_0(\theta)
+  = \frac{L(\theta)\pi(\theta)}{q_0(\theta)},\qquad
+  \log\Psi_0(\theta)
+  = \log L(\theta)+\log\pi(\theta)-\log q_0(\theta).
   \label{eq:psi}
 \end{equation}
 Consequently,
 \begin{equation}
   Z
-  = \int_{\Theta}\Psi(\theta)q(\theta)\dd\theta.
+  = \int_{\Theta}\Psi_0(\theta)q_0(\theta)\dd\theta.
   \label{eq:change-measure}
 \end{equation}
-Thus \(q\) acts as the nested sampler's pseudo-prior and \(\Psi\) acts as its
-pseudo-likelihood.  No additional Metropolis--Hastings ratio or later
-importance correction is applied.  This implementation fixes any tempering
+Thus \(q_0\) acts as the nested sampler's pseudo-prior and \(\Psi_0\) acts as
+its pseudo-likelihood.  This implementation fixes any tempering
 parameter at \(\beta=1\); there is no public \code{beta} argument.
+
+The default \code{fixed_morph} scheme also proposes from \(q_0\).  The
+experimental \code{adaptive_morph} scheme refits a separate proposal from the
+current live set every 25 iterations by default, while all density evaluation
+and ordering continue to use \(q_0\) and \(\Psi_0\).  It directly accepts the
+first proposal above the constraint without a Metropolis--Hastings correction.
+It therefore does not in general preserve constrained \(q_0\), and its
+quadrature is heuristic and may be biased.
 
 The code computes Equation~\eqref{eq:psi} in
 \code{BatchEvaluator.evaluate} after evaluating all three log densities.
 It permits \(-\infty\) likelihood or prior values to represent zero density.
 It rejects NaN and \(+\infty\).  If
-\(\log L+\log\pi\) is finite but \(\log q=-\infty\), it raises
+\(\log L+\log\pi\) is finite but \(\log q_0=-\infty\), it raises
 \code{ProposalSupportError}; the run does not return a result.
 
 \subsection{Support and coordinate requirements}
@@ -215,7 +222,7 @@ It rejects NaN and \(+\infty\).  If
 
 The identity in Equation~\eqref{eq:change-measure} is useful only if
 \[
-  q(\theta)>0
+  q_0(\theta)>0
   \quad\text{wherever}\quad
   L(\theta)\pi(\theta)
 \]
@@ -550,7 +557,7 @@ model = CallableModel(
 # Rows must use the same (x, y) coordinates as the model.
 posterior_samples = np.load("posterior_samples.npy")
 
-proposal = MorphProposal.fit(
+importance_morph = MorphProposal.fit(
     posterior_samples,
     morph_type="2_group",
     param_names=model.parameter_names,
@@ -558,8 +565,10 @@ proposal = MorphProposal.fit(
 )
 
 sampler = MINSampler(
-    model,
-    proposal,
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="fixed_morph",
+    proposal_update_interval=25,
     n_live=500,
     rng=42,
     proposal_batch_size=64,
@@ -759,8 +768,13 @@ class UniformBoxProposal:
         inside = np.all(np.abs(theta) <= 5.0, axis=1)
         return np.where(inside, -2.0 * np.log(10.0), -np.inf)
 
-proposal = UniformBoxProposal()
-sampler = MINSampler(model, proposal, n_live=500, rng=42)
+importance_morph = UniformBoxProposal()
+sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    n_live=500,
+    rng=42,
+)
 \end{lstlisting}
 
 In this setup, omit every \MorphZ{} fitting argument.  The change-of-measure
@@ -1274,8 +1288,8 @@ callback, or backend is not guessed away by the adapter.\\
 
 \subsection{Dead and live arrays}
 
-The result separately stores points, \(\log L\), \(\log\pi\), \(\log q\),
-\(\log\Psi\), and tie breakers for dead and final-live populations.  Dead
+The result separately stores points, \(\log L\), \(\log\pi\), \(\log q_0\),
+\(\log\Psi_0\), and tie breakers for dead and final-live populations.  Dead
 points additionally store \(\log X_i\) and their log quadrature contributions.
 All arrays are copied, read-only, and validated.
 
@@ -1284,7 +1298,7 @@ dead-then-live ordering.  Convenience properties use the same order:
 
 \begin{lstlisting}
 points = result.all_points
-log_psi = result.all_log_psi
+log_psi0 = result.all_log_psi0
 weights = result.posterior_weights
 \end{lstlisting}
 

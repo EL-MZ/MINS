@@ -24,7 +24,7 @@ catch user exceptions to guess vectorization.
 ## MorphProposal
 
 ```python
-proposal = MorphProposal.fit(
+importance_morph = MorphProposal.fit(
     posterior_samples,
     morph_type="2_group",
     param_names=("x", "y"),
@@ -47,8 +47,8 @@ exclusive. Training data must be finite with shape `(n_samples, ndim)`.
 The selected structure is recorded in metadata:
 
 ```python
-proposal.metadata.selected_groups
-proposal.metadata.single_parameters
+importance_morph.metadata.selected_groups
+importance_morph.metadata.single_parameters
 ```
 
 The adapter uses the installed `morphZ.GroupKDE` directly. It copies training
@@ -58,12 +58,19 @@ and calls the same fitted object's normalized `logpdf` for `log_prob`. MorphZ
 explicit NumPy Generator per resample. The inspected MorphZ implementation
 restores legacy global RNG state.
 
+`importance_morph.refit(live_theta)` returns a new `MorphProposal` using a
+deep-copied version of the original bandwidth and grouping configuration. It
+does not mutate the importance object. Automatic `morph_type` grouping is
+recomputed; file-backed grouping is retained in memory.
+
 ## MINSampler
 
 ```python
 sampler = MINSampler(
-    model,
-    proposal,
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="fixed_morph",
+    proposal_update_interval=25,
     n_live=500,
     rng=np.random.default_rng(42),
     proposal_batch_size=64,
@@ -107,9 +114,24 @@ The resolved policy is retained in `result.config.stopping`. See
 [Stopping criteria](stopping.md) for metric definitions, custom `"all"` and
 `"any"` policies, persistence rules, and limitations.
 
-The constructor validates dimensions and owns the supplied generator. Live
-points are new proposal draws. At every iteration, ordering and rejection use
-`log_psi = log_likelihood + log_prior - log_q`.
+The constructor validates dimensions and owns the supplied generator. Initial
+live points always come from the fixed `importance_morph`. Every candidate is
+evaluated with
+`log_psi0 = log_likelihood + log_prior - log_q0`, where `log_q0` always comes
+from that original object.
+
+`proposal_scheme="fixed_morph"` uses the importance Morph for constrained
+draws and preserves the original rejection sampler. With
+`proposal_scheme="adaptive_morph"`, the sampler refits a separate proposal
+Morph from all `n_live` current live rows before replacements 26, 51, 76, and
+so on for the default interval. Successful fits atomically replace only the
+proposal Morph. Failed fits retain the previous proposal and are retried at the
+next interval.
+
+Adaptive candidates are accepted directly when they pass the old-Morph
+`log_psi0` constraint. This samples the refitted proposal under the constraint,
+not constrained `q0`; no MH or density-ratio correction is applied. Adaptive
+`logZ` and posterior weights are therefore heuristic and may be biased.
 
 `tie_policy="strict"` is correct for ordinary continuous pseudo-likelihoods.
 Use `"randomized_plateau"` for targets with exact nonzero-probability ties. It
@@ -133,6 +155,9 @@ counts, live `logPsi` range, and elapsed time. It also receives integer met
 flags named `criterion_<name>_met` for each enabled criterion. Library code
 does not otherwise print, display, or write files.
 
+Progress mappings and `RunHistory` also include `proposal_revision`,
+`proposal_update_attempts`, and `proposal_update_failures`.
+
 ## Result
 
 `MINSResult` is frozen and its arrays are read-only. Key scalar fields are:
@@ -143,9 +168,15 @@ does not otherwise print, display, or write files.
 - complete `config` and initial/final RNG state representations.
 
 Dead and final-live arrays separately store points, `log_likelihood`,
-`log_prior`, `log_q`, `log_psi`, volume/weight values, and tie breakers.
+`log_prior`, fixed `log_q0`, fixed `log_psi0`, volume/weight values, and tie
+breakers.
 `log_posterior_weights` covers dead then live points. Convenience properties
-`all_points`, `all_log_psi`, and `posterior_weights` use that same ordering.
+`all_points`, `all_log_psi0`, and `posterior_weights` use that same ordering.
+
+`proposal_updates` contains immutable records for every scheduled adaptive
+refit, including its boundary iteration, success, active revision, training
+row count, proposal metadata, and any error. `importance_morph_description`
+describes the fixed density used for all `log_q0` values.
 
 For consumers that require unweighted samples:
 
@@ -166,9 +197,9 @@ highest-fidelity posterior summaries.
 dead/live/total log evidence, information, `logzerr`, remaining fraction, live
 pseudo-likelihood ESS, live-mean RSE, live log-evidence error, log-evidence
 stability, stopping streak, live pseudo-likelihood range, calls, proposal
-counts, acceptance fraction, and elapsed time. Every array is read-only and
-has shape `(niter,)`; early `logz_stability` entries are `NaN` until its exact
-window is available.
+counts, acceptance fraction, elapsed time, and proposal update counters. Every
+array is read-only and has shape `(niter,)`; early `logz_stability` entries are
+`NaN` until its exact window is available.
 
 ## Failure semantics
 
@@ -188,6 +219,9 @@ Both have `success=True`. Hard stops include:
 Hard stops return a valid partial result with the current final-live correction.
 Malformed model/proposal output and proposal support failure raise typed
 exceptions because no statistically coherent result can be formed.
+Adaptive Morph refit failures are different: they are recorded in
+`proposal_updates`, the last working proposal remains active, and the sampler
+retries at the next configured interval.
 
 ## Diagnostics and plots
 

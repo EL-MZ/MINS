@@ -40,6 +40,27 @@ def test_morph_adapter_copies_and_validates_training_data() -> None:
         MorphProposal.fit(training, groups=[])
 
 
+def test_morph_refit_returns_new_object_and_preserves_original_density() -> None:
+    original_training = np.random.default_rng(51).normal(size=(120, 1))
+    proposal = MorphProposal.fit(
+        original_training,
+        groups=[],
+        param_names=("x",),
+        kde_bw="silverman",
+    )
+    points = np.array([[-1.0], [0.0], [1.0]])
+    original_values = proposal.log_prob(points)
+    refit_training = np.random.default_rng(52).normal(4.0, 0.5, size=(80, 1))
+
+    refitted = proposal.refit(refit_training)
+
+    assert refitted is not proposal
+    assert proposal.metadata.n_training == 120
+    assert refitted.metadata.n_training == 80
+    np.testing.assert_array_equal(proposal.log_prob(points), original_values)
+    assert not np.allclose(refitted.log_prob(points), original_values)
+
+
 def test_morph_adapter_rejects_bad_log_prob_shape() -> None:
     training = np.random.default_rng(6).normal(size=(100, 1))
     proposal = MorphProposal.fit(training, groups=[])

@@ -13,46 +13,66 @@ Z=\int_\Theta L(\theta)\pi(\theta)\,\mathrm d\theta,
 
 where \(\pi\) is a normalized density with respect to Lebesgue measure on the
 declared parameterization. A fixed MorphZ `GroupKDE`, trained from user-supplied
-posterior samples, represents a normalized density \(q\) on the same measure.
+posterior samples, represents a normalized importance density \(q_0\) on the
+same measure.
 
-Phase 2 fixes \(\beta=1\), uses \(q\) as its pseudo-prior, and defines
+Phase 2 fixes \(\beta=1\), uses \(q_0\) as its pseudo-prior, and defines
 
 \[
-\log\Psi(\theta)
-=\log L(\theta)+\log\pi(\theta)-\log q(\theta).
+\log\Psi_0(\theta)
+=\log L(\theta)+\log\pi(\theta)-\log q_0(\theta).
 \]
 
-Consequently \(Z=\int\Psi(\theta)q(\theta)\,\mathrm d\theta\).
+Consequently \(Z=\int\Psi_0(\theta)q_0(\theta)\,\mathrm d\theta\).
 
 ## Morph training and support
 
-Morph is fit exactly once before a run from a copied finite array with shape
+The importance Morph is fit exactly once before a run from a copied finite
+array with shape
 `(n_samples, ndim)`. The supplied grouping definition and bandwidth settings
 determine `GroupKDE`; it is not adapted from live or dead points.
 
-`MorphProposal.sample(n, rng)` calls the fitted GroupKDE resampler.
-`MorphProposal.log_prob(theta)` calls that same object's normalized log density.
-Thus sampling and density evaluation describe one fixed \(q\).
+`importance_morph.sample(n, rng)` creates the initial live set and
+`importance_morph.log_prob(theta)` supplies every stored `log_q0`. This object
+is never mutated or replaced.
 
-The required non-defensive assumption is that \(q(\theta)>0\) everywhere
+The required non-defensive assumption is that \(q_0(\theta)>0\) everywhere
 \(L(\theta)\pi(\theta)\) has material mass. A finite numerator with
-`log_q == -inf` is a fatal proposal-support error. Phase 2 neither repairs nor
+`log_q0 == -inf` is a fatal importance-support error. Phase 2 neither repairs nor
 hides missing support.
 
 ## Replacement distribution
 
-Initial live points are independent new draws from \(q\), never reused training
-samples. At threshold \(\lambda\), independent proposal draws are scanned in
-generation order and the first point satisfying
-`candidate_log_psi > threshold` is accepted. This rejection sampler targets
+Initial live points are independent new draws from \(q_0\), never reused
+training samples.
+
+With `proposal_scheme="fixed_morph"`, candidates are also drawn from \(q_0\).
+At threshold \(\lambda\), independent draws are scanned in generation order
+and the first point satisfying `candidate_log_psi0 > threshold` is accepted.
+This rejection sampler targets
 
 \[
-q(\theta\mid\log\Psi(\theta)>\lambda).
+q_0(\theta\mid\log\Psi_0(\theta)>\lambda).
 \]
 
 The optional `randomized_plateau` policy augments every point with independent
 \(u\sim U(0,1)\) and applies lexicographic ordering to
-\((\log\Psi,u)\). No Metropolis-Hastings or additional importance ratio is used.
+\((\log\Psi_0,u)\).
+
+With `proposal_scheme="adaptive_morph"`, MINS initially proposes from \(q_0\).
+After every 25 completed iterations by default, it fits a new proposal Morph
+\(r_c\) to a copy of all current live points using the original Morph fit
+configuration. Candidates then come from \(r_c\), while their `log_q0`,
+`log_psi0`, ordering, and constraint continue to use the original importance
+Morph. A failed refit leaves the previous proposal active and is retried at the
+next interval.
+
+The adaptive scheme directly accepts the first \(r_c\) draw above the
+\(\Psi_0\) constraint. It therefore targets
+\(r_c(\theta\mid\log\Psi_0(\theta)>\lambda)\), not constrained \(q_0\).
+There is no Metropolis-Hastings or rejection-ratio correction. Consequently,
+the deterministic \(q_0\)-volume quadrature below is heuristic in adaptive
+mode and its evidence estimate may be biased.
 
 ## Evidence estimator
 
@@ -60,20 +80,20 @@ For \(N\) live points and completed discard \(i\), deterministic expected
 volumes are \(X_i=\exp(-i/N)\). Rectangular dead-point contributions are
 
 \[
-\log w_i=\log(X_{i-1}-X_i)+\log\Psi_i.
+\log w_i=\log(X_{i-1}-X_i)+\log\Psi_{0,i}.
 \]
 
 After \(K\) completed replacements, every remaining point contributes
 
 \[
-\log w_j^{\rm live}=\log X_K-\log N+\log\Psi_j^{\rm live}.
+\log w_j^{\rm live}=\log X_K-\log N+\log\Psi_{0,j}^{\rm live}.
 \]
 
 The reported `logz` is `logsumexp` of all dead and final-live contributions.
 Normalized quadrature contributions are posterior weights. Information is
 
 \[
-H=\sum_a \widetilde w_a(\log\Psi_a-\log Z)
+H=\sum_a \widetilde w_a(\log\Psi_{0,a}-\log Z)
 \]
 
 and the reported theoretical error is \(\sqrt{H/N}\). This is an approximation,
@@ -85,7 +105,7 @@ At every completed replacement the mean-live estimate is
 
 \[
 \log Z_{\rm live}=\log X_K+
-\operatorname{logsumexp}(\log\Psi^{\rm live})-\log N
+\operatorname{logsumexp}(\log\Psi_0^{\rm live})-\log N
 \]
 
 and the legacy remaining-fraction diagnostic is
@@ -142,9 +162,13 @@ stopping policy.
 ## User obligations and limitations
 
 - `log_prior` includes every normalizing constant.
-- `log_likelihood`, `log_prior`, and Morph `log_prob` use the same coordinates.
+- `log_likelihood`, `log_prior`, and importance-Morph `log_prob` use the same
+  coordinates.
 - Training samples are representative of every material posterior region.
-- Rejection draws are practical at the requested final constraint.
+- Fixed rejection or heuristic adaptive draws are practical at the requested
+  final constraint.
+- Adaptive threshold-only draws do not preserve constrained \(q_0\), so their
+  evidence and posterior-weight interpretation is approximate.
 - Deterministic shrinkage and \(\sqrt{H/N}\) do not account for all Monte Carlo
   or Morph-fitting uncertainty.
 - Phase 2 is post-processing evidence estimation and does not discover the

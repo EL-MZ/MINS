@@ -29,7 +29,7 @@ def test_first_valid_constrained_draw_has_uniform_conditional_distribution() -> 
     for _ in range(3_000):
         attempt = draw_constrained(
             evaluator=evaluator,
-            proposal=proposal,
+            proposal_morph=proposal,
             threshold=np.log(0.5),
             threshold_tie_breaker=0.0,
             tie_policy="strict",
@@ -56,7 +56,7 @@ def test_constrained_draw_obeys_proposal_limit() -> None:
     )
     attempt = draw_constrained(
         evaluator=BatchEvaluator(model, proposal),
-        proposal=proposal,
+        proposal_morph=proposal,
         threshold=1.0,
         threshold_tie_breaker=0.0,
         tie_policy="strict",
@@ -126,7 +126,7 @@ def test_constrained_draw_rejects_bad_proposal_sample_shape() -> None:
     with pytest.raises(InvalidProposalOutput, match="sample must have shape"):
         draw_constrained(
             evaluator=BatchEvaluator(model, proposal),
-            proposal=proposal,
+            proposal_morph=proposal,
             threshold=-1.0,
             threshold_tie_breaker=0.0,
             tie_policy="strict",

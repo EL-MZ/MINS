@@ -32,8 +32,8 @@ def _constant_problem() -> tuple[CallableModel, StandardNormalProposal]:
 def test_constant_integrand_end_to_end_with_randomized_plateau() -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=20,
         rng=8,
         tie_policy="randomized_plateau",
@@ -67,8 +67,8 @@ def test_hybrid_stopping_policy_succeeds_and_records_complete_state() -> None:
         stability_window=10,
     )
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=20,
         rng=81,
         tie_policy="randomized_plateau",
@@ -118,8 +118,8 @@ def test_all_waits_for_every_criterion_while_any_stops_on_first() -> None:
         StoppingCriterionConfig("remaining_fraction", 0.5),
     )
     all_result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=20,
         rng=82,
         tie_policy="randomized_plateau",
@@ -128,8 +128,8 @@ def test_all_waits_for_every_criterion_while_any_stops_on_first() -> None:
         max_iterations=100,
     )
     any_result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=20,
         rng=82,
         tie_policy="randomized_plateau",
@@ -146,8 +146,8 @@ def test_all_waits_for_every_criterion_while_any_stops_on_first() -> None:
 def test_hard_limit_remains_failure_after_only_one_all_criterion_passes() -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=20,
         rng=83,
         tie_policy="randomized_plateau",
@@ -170,7 +170,7 @@ def test_hard_limit_remains_failure_after_only_one_all_criterion_passes() -> Non
 def test_run_rejects_simultaneous_legacy_and_policy_arguments() -> None:
     model, proposal = _constant_problem()
     with pytest.raises(ConfigurationError, match="dlogz and stopping"):
-        MINSampler(model, proposal, n_live=10, rng=84).run(
+        MINSampler(model=model, importance_morph=proposal, n_live=10, rng=84).run(
             dlogz=0.1,
             stopping=StoppingPolicy(
                 criteria=(StoppingCriterionConfig("logzerr", 0.1),)
@@ -181,15 +181,15 @@ def test_run_rejects_simultaneous_legacy_and_policy_arguments() -> None:
 def test_same_seed_reproduces_scientific_result() -> None:
     model, proposal = _constant_problem()
     first = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=12,
         rng=123,
         tie_policy="randomized_plateau",
     ).run(dlogz=0.25, max_iterations=100)
     second = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=12,
         rng=123,
         tie_policy="randomized_plateau",
@@ -205,8 +205,8 @@ def test_same_seed_reproduces_scientific_result() -> None:
 def test_strict_plateau_returns_partial_failed_result() -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=10,
         rng=4,
         tie_policy="strict",
@@ -235,7 +235,7 @@ def test_iteration_limit_is_not_scientific_success() -> None:
         log_likelihood_fn=lambda x: -0.5 * (x[:, 0] - 1.0) ** 2,
         log_prior_fn=proposal.log_prob,
     )
-    result = MINSampler(model, proposal, n_live=15, rng=2).run(
+    result = MINSampler(model=model, importance_morph=proposal, n_live=15, rng=2).run(
         dlogz=1e-8,
         max_iterations=3,
         max_proposals_per_replacement=1_000,
@@ -255,8 +255,8 @@ def test_likelihood_call_limit_is_not_scientific_success() -> None:
         log_prior_fn=proposal.log_prob,
     )
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=10,
         rng=19,
         proposal_batch_size=4,
@@ -274,8 +274,8 @@ def test_likelihood_call_limit_is_not_scientific_success() -> None:
 def test_wall_time_limit_returns_initialized_partial_result() -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=10,
         rng=7,
         tie_policy="randomized_plateau",
@@ -294,8 +294,8 @@ def test_progress_callback_receives_standard_nested_sampling_information() -> No
     model, proposal = _constant_problem()
     snapshots: list[dict[str, float | int]] = []
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=10,
         rng=31,
         tie_policy="randomized_plateau",
@@ -324,6 +324,9 @@ def test_progress_callback_receives_standard_nested_sampling_information() -> No
         "stopping_tolerance",
         "threshold",
         "elapsed_seconds",
+        "proposal_revision",
+        "proposal_update_attempts",
+        "proposal_update_failures",
     }
     assert len(snapshots) == result.niter
     assert required <= snapshots[-1].keys()
@@ -340,8 +343,8 @@ def test_progress_callback_receives_standard_nested_sampling_information() -> No
 def test_progress_true_renders_standard_terminal_fields(capsys: Any) -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=8,
         rng=32,
         tie_policy="randomized_plateau",
@@ -362,7 +365,7 @@ def test_progress_true_renders_standard_terminal_fields(capsys: Any) -> None:
 def test_invalid_progress_option_is_rejected() -> None:
     model, proposal = _constant_problem()
     with pytest.raises(TypeError, match="progress"):
-        MINSampler(model, proposal, n_live=8, rng=33).run(
+        MINSampler(model=model, importance_morph=proposal, n_live=8, rng=33).run(
             max_iterations=1,
             progress="yes",  # type: ignore[arg-type]
         )
@@ -371,8 +374,8 @@ def test_invalid_progress_option_is_rejected() -> None:
 def test_result_equal_weight_resampling_is_reproducible_and_configurable() -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=10,
         rng=34,
         tie_policy="randomized_plateau",
@@ -405,8 +408,8 @@ def test_result_equal_weight_resampling_validates_sample_count(
 ) -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=8,
         rng=35,
         tie_policy="randomized_plateau",
@@ -418,8 +421,8 @@ def test_result_equal_weight_resampling_validates_sample_count(
 def test_result_equal_weight_resampling_requires_explicit_rng() -> None:
     model, proposal = _constant_problem()
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=8,
         rng=36,
         tie_policy="randomized_plateau",

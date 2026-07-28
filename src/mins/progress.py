@@ -72,7 +72,10 @@ class _TqdmProgress:
             "stop": (
                 f"{int(info['stopping_streak'])}/{int(info['stopping_consecutive'])}"
             ),
+            "prop": int(info["proposal_revision"]),
         }
+        if int(info["proposal_update_failures"]):
+            self._postfix["propfail"] = int(info["proposal_update_failures"])
         if "criterion_logz_stability_met" in info:
             self._postfix["stable"] = f"{info['logz_stability']:.2e}"
         self._bar.set_postfix(self._postfix, refresh=False)

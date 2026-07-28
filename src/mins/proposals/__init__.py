@@ -1,6 +1,6 @@
 """Proposal interfaces and adapters."""
 
-from .base import Proposal
+from .base import Proposal, RefittableProposal
 from .morph import MorphMetadata, MorphProposal
 
-__all__ = ["MorphMetadata", "MorphProposal", "Proposal"]
+__all__ = ["MorphMetadata", "MorphProposal", "Proposal", "RefittableProposal"]

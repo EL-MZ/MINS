@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -51,10 +52,12 @@ class MorphProposal:
         self,
         backend: Any,
         metadata: MorphMetadata,
+        refit_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self._backend = backend
         self.metadata = metadata
         self.ndim = metadata.ndim
+        self._refit_kwargs = deepcopy(refit_kwargs)
 
     @classmethod
     def fit(
@@ -211,7 +214,29 @@ class MorphProposal:
                 "resample call; MorphZ 0.4.1 restores legacy global RNG state."
             ),
         )
-        return cls(backend, metadata)
+        if morph_type is not None:
+            refit_grouping: dict[str, Any] = {"morph_type": morph_type}
+        else:
+            # Retain the already loaded in-memory definition. Refit operations
+            # must not depend on a group file continuing to exist.
+            refit_grouping = {"groups": deepcopy(group_definition)}
+        refit_kwargs = {
+            **refit_grouping,
+            "param_names": names,
+            "kde_bw": deepcopy(kde_bw),
+            "min_tc": min_tc,
+            "top_k_greedy": top_k_greedy,
+        }
+        return cls(backend, metadata, refit_kwargs)
+
+    def refit(
+        self,
+        training_theta: NDArray[np.float64],
+    ) -> MorphProposal:
+        """Fit a new Morph with the original settings without mutating this one."""
+        if self._refit_kwargs is None:
+            raise RuntimeError("this MorphProposal does not retain refit settings")
+        return type(self).fit(training_theta, **deepcopy(self._refit_kwargs))
 
     def sample(
         self,

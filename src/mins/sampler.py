@@ -1,4 +1,4 @@
-"""Serial fixed-Morph nested-importance sampler state machine."""
+"""Serial fixed-importance nested sampler with selectable Morph proposals."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import MINSConfig, TiePolicy
+from .adaptive import AdaptiveMorphController
+from .config import MINSConfig, ProposalScheme, TiePolicy
 from .constrained import (
     BatchEvaluator,
     draw_constrained,
@@ -18,7 +19,7 @@ from .constrained import (
 )
 from .model import Model
 from .progress import ProgressOption, create_progress_reporter
-from .proposals import MorphProposal, Proposal
+from .proposals import MorphProposal, Proposal, RefittableProposal
 from .quadrature import (
     dead_log_contribution,
     estimate_information,
@@ -46,15 +47,20 @@ def _as_generator(
 
 
 class MINSampler:
-    """Fixed-pseudo-prior serial nested-importance sampler.
+    """Fixed-importance sampler with selectable Morph proposal schemes.
 
     Parameters
     ----------
     model
         Batch model with a normalized ``log_prior``.
-    proposal
-        Fixed normalized proposal. Phase 2 normally uses
+    importance_morph
+        Fixed normalized importance distribution. Phase 2 normally uses
         :class:`~mins.MorphProposal`.
+    proposal_scheme
+        ``"fixed_morph"`` draws from the importance Morph.
+        ``"adaptive_morph"`` periodically refits a separate proposal Morph.
+    proposal_update_interval
+        Completed iterations between adaptive proposal refits.
     n_live
         Static live-point count, at least two.
     rng
@@ -68,20 +74,33 @@ class MINSampler:
 
     def __init__(
         self,
-        model: Model,
-        proposal: Proposal,
         *,
+        model: Model,
+        importance_morph: Proposal,
+        proposal_scheme: ProposalScheme = "fixed_morph",
+        proposal_update_interval: int = 25,
         n_live: int,
         rng: int | np.random.Generator,
         proposal_batch_size: int = 64,
         tie_policy: TiePolicy = "strict",
     ) -> None:
-        if model.ndim != proposal.ndim:
+        if model.ndim != importance_morph.ndim:
             raise ValueError(
-                f"model ndim {model.ndim} does not match proposal ndim {proposal.ndim}"
+                f"model ndim {model.ndim} does not match importance Morph ndim "
+                f"{importance_morph.ndim}"
+            )
+        if proposal_scheme == "adaptive_morph" and not isinstance(
+            importance_morph, RefittableProposal
+        ):
+            raise TypeError(
+                "adaptive_morph requires an importance Morph with a refit method"
             )
         self.model = model
-        self.proposal = proposal
+        self.importance_morph = importance_morph
+        self.proposal_morph = importance_morph
+        self.adaptive_proposal_controller: AdaptiveMorphController | None = None
+        self.proposal_scheme = proposal_scheme
+        self.proposal_update_interval = proposal_update_interval
         self.n_live = n_live
         self.rng = _as_generator(rng)
         self.proposal_batch_size = proposal_batch_size
@@ -89,6 +108,8 @@ class MINSampler:
         MINSConfig(
             n_live=n_live,
             proposal_batch_size=proposal_batch_size,
+            proposal_scheme=proposal_scheme,
+            proposal_update_interval=proposal_update_interval,
             tie_policy=tie_policy,
         )
 
@@ -102,6 +123,8 @@ class MINSampler:
         n_live: int,
         rng: int | np.random.Generator,
         proposal_batch_size: int = 64,
+        proposal_scheme: ProposalScheme = "fixed_morph",
+        proposal_update_interval: int = 25,
         tie_policy: TiePolicy = "strict",
     ) -> MINSampler:
         """Fit MorphZ once and construct a sampler.
@@ -109,17 +132,19 @@ class MINSampler:
         ``morph_config`` is passed as keyword arguments to
         :meth:`MorphProposal.fit`.
         """
-        proposal = MorphProposal.fit(
+        importance_morph = MorphProposal.fit(
             posterior_samples,
             param_names=model.parameter_names,
             **dict(morph_config),
         )
         return cls(
-            model,
-            proposal,
+            model=model,
+            importance_morph=importance_morph,
             n_live=n_live,
             rng=rng,
             proposal_batch_size=proposal_batch_size,
+            proposal_scheme=proposal_scheme,
+            proposal_update_interval=proposal_update_interval,
             tie_policy=tie_policy,
         )
 
@@ -169,7 +194,7 @@ class MINSampler:
         InvalidProposalOutput
             If proposal samples or densities are malformed.
         ProposalSupportError
-            If ``q`` is zero at a finite target-integrand point.
+            If fixed ``q0`` is zero at a finite target-integrand point.
         MissingOptionalDependency
             If ``progress=True`` is requested without the optional tqdm
             dependency.
@@ -179,6 +204,8 @@ class MINSampler:
             dlogz=dlogz,
             stopping=stopping,
             proposal_batch_size=self.proposal_batch_size,
+            proposal_scheme=self.proposal_scheme,
+            proposal_update_interval=self.proposal_update_interval,
             max_iterations=max_iterations,
             max_proposals_per_replacement=max_proposals_per_replacement,
             max_likelihood_calls=max_likelihood_calls,
@@ -196,12 +223,22 @@ class MINSampler:
         start = time.monotonic()
         deadline = None if max_wall_time is None else start + max_wall_time
         initial_state = copy.deepcopy(self.rng.bit_generator.state)
-        evaluator = BatchEvaluator(self.model, self.proposal)
+        evaluator = BatchEvaluator(self.model, self.importance_morph)
+        self.proposal_morph = self.importance_morph
+        self.adaptive_proposal_controller = None
+        if config.proposal_scheme == "adaptive_morph":
+            # Constructor validation establishes this runtime protocol.
+            if not isinstance(self.importance_morph, RefittableProposal):
+                raise RuntimeError("adaptive importance Morph lost its refit contract")
+            self.adaptive_proposal_controller = AdaptiveMorphController(
+                importance_morph=self.importance_morph,
+                update_interval=config.proposal_update_interval,
+            )
 
         try:
             live_theta = np.array(
                 validate_proposal_sample(
-                    self.proposal.sample(self.n_live, self.rng),
+                    self.importance_morph.sample(self.n_live, self.rng),
                     n=self.n_live,
                     ndim=self.model.ndim,
                 ),
@@ -213,15 +250,15 @@ class MINSampler:
             raise
         live_log_likelihood = np.array(initial.log_likelihood, copy=True)
         live_log_prior = np.array(initial.log_prior, copy=True)
-        live_log_q = np.array(initial.log_q, copy=True)
-        live_log_psi = np.array(initial.log_psi, copy=True)
+        live_log_q0 = np.array(initial.log_q0, copy=True)
+        live_log_psi0 = np.array(initial.log_psi0, copy=True)
         live_tie_breakers = self.rng.random(self.n_live)
 
         dead_points: list[NDArray[np.float64]] = []
         dead_log_likelihood: list[float] = []
         dead_log_prior: list[float] = []
-        dead_log_q: list[float] = []
-        dead_log_psi: list[float] = []
+        dead_log_q0: list[float] = []
+        dead_log_psi0: list[float] = []
         dead_tie_breakers: list[float] = []
         dead_log_x: list[float] = []
         dead_log_delta_x: list[float] = []
@@ -245,6 +282,9 @@ class MINSampler:
         history_likelihood_calls: list[int] = []
         history_acceptance: list[float] = []
         history_elapsed: list[float] = []
+        history_proposal_revision: list[int] = []
+        history_proposal_update_attempts: list[int] = []
+        history_proposal_update_failures: list[int] = []
 
         niter = 0
         n_proposals = 0
@@ -266,16 +306,25 @@ class MINSampler:
                 termination_reason = "max_wall_time"
                 break
 
+            if self.adaptive_proposal_controller is not None:
+                self.proposal_morph = self.adaptive_proposal_controller.update_if_due(
+                    iteration=niter,
+                    live_theta=live_theta,
+                )
+                if deadline is not None and time.monotonic() >= deadline:
+                    termination_reason = "max_wall_time"
+                    break
+
             if config.tie_policy == "randomized_plateau":
-                worst = int(np.lexsort((live_tie_breakers, live_log_psi))[0])
+                worst = int(np.lexsort((live_tie_breakers, live_log_psi0))[0])
             else:
-                worst = int(np.argmin(live_log_psi))
-            threshold = float(live_log_psi[worst])
+                worst = int(np.argmin(live_log_psi0))
+            threshold = float(live_log_psi0[worst])
             threshold_tie = float(live_tie_breakers[worst])
             try:
                 attempt = draw_constrained(
                     evaluator=evaluator,
-                    proposal=self.proposal,
+                    proposal_morph=self.proposal_morph,
                     threshold=threshold,
                     threshold_tie_breaker=threshold_tie,
                     tie_policy=config.tie_policy,
@@ -294,7 +343,7 @@ class MINSampler:
                 if (
                     termination_reason == "constrained_sampling_exhausted"
                     and config.tie_policy == "strict"
-                    and np.count_nonzero(live_log_psi == threshold) > 1
+                    and np.count_nonzero(live_log_psi0 == threshold) > 1
                 ):
                     termination_reason = "plateau_stall"
                 break
@@ -307,8 +356,8 @@ class MINSampler:
             dead_points.append(np.array(live_theta[worst], copy=True))
             dead_log_likelihood.append(float(live_log_likelihood[worst]))
             dead_log_prior.append(float(live_log_prior[worst]))
-            dead_log_q.append(float(live_log_q[worst]))
-            dead_log_psi.append(threshold)
+            dead_log_q0.append(float(live_log_q0[worst]))
+            dead_log_psi0.append(threshold)
             dead_tie_breakers.append(threshold_tie)
             dead_log_x.append(log_x)
             dead_log_delta_x.append(log_delta_x)
@@ -317,8 +366,8 @@ class MINSampler:
             live_theta[worst] = point.theta
             live_log_likelihood[worst] = point.log_likelihood
             live_log_prior[worst] = point.log_prior
-            live_log_q[worst] = point.log_q
-            live_log_psi[worst] = point.log_psi
+            live_log_q0[worst] = point.log_q0
+            live_log_psi0[worst] = point.log_psi0
             live_tie_breakers[worst] = point.tie_breaker
             niter = iteration
 
@@ -328,13 +377,13 @@ class MINSampler:
                 log_weight,
                 threshold,
             )
-            logz_live = estimated_live_logz(log_x, live_log_psi)
+            logz_live = estimated_live_logz(log_x, live_log_psi0)
             logz_total = float(np.logaddexp(logz_dead, logz_live))
             information = estimate_information(
                 logz_dead=logz_dead,
                 dead_log_psi_mean=dead_log_psi_mean,
                 logz_live=logz_live,
-                live_log_psi=live_log_psi,
+                live_log_psi=live_log_psi0,
                 logz_total=logz_total,
             )
             logzerr = float(np.sqrt(information / self.n_live))
@@ -343,7 +392,7 @@ class MINSampler:
                 logz_total,
             )
             stopping_metrics = calculate_stopping_metrics(
-                live_log_psi=live_log_psi,
+                live_log_psi=live_log_psi0,
                 logz_live=logz_live,
                 logz_total=logz_total,
                 logz_history=stability_history,
@@ -369,13 +418,28 @@ class MINSampler:
             history_live_logz_error.append(stopping_metrics.live_logz_error)
             history_logz_stability.append(stopping_metrics.logz_stability)
             history_stopping_streak.append(stopping_streak)
-            history_live_min.append(float(np.min(live_log_psi)))
-            history_live_median.append(float(np.median(live_log_psi)))
-            history_live_max.append(float(np.max(live_log_psi)))
+            history_live_min.append(float(np.min(live_log_psi0)))
+            history_live_median.append(float(np.median(live_log_psi0)))
+            history_live_max.append(float(np.max(live_log_psi0)))
             history_proposals.append(attempt.n_proposed)
             history_likelihood_calls.append(evaluator.n_likelihood_calls)
             history_acceptance.append(niter / n_proposals)
             history_elapsed.append(elapsed)
+            if self.adaptive_proposal_controller is None:
+                proposal_revision = 0
+                proposal_update_attempts = 0
+                proposal_update_failures = 0
+            else:
+                proposal_revision = self.adaptive_proposal_controller.revision
+                proposal_update_attempts = (
+                    self.adaptive_proposal_controller.update_attempts
+                )
+                proposal_update_failures = (
+                    self.adaptive_proposal_controller.update_failures
+                )
+            history_proposal_revision.append(proposal_revision)
+            history_proposal_update_attempts.append(proposal_update_attempts)
+            history_proposal_update_failures.append(proposal_update_failures)
 
             progress_info: dict[str, float | int] = {
                 "iteration": niter,
@@ -402,6 +466,9 @@ class MINSampler:
                 "live_median_log_psi": history_live_median[-1],
                 "live_max_log_psi": history_live_max[-1],
                 "elapsed_seconds": elapsed,
+                "proposal_revision": proposal_revision,
+                "proposal_update_attempts": proposal_update_attempts,
+                "proposal_update_failures": proposal_update_failures,
             }
             if config.dlogz is not None:
                 progress_info["stopping_tolerance"] = config.dlogz
@@ -419,14 +486,14 @@ class MINSampler:
         final_log_x = -niter / self.n_live
         quadrature = finalize_quadrature(
             dead_log_weights,
-            dead_log_psi,
+            dead_log_psi0,
             final_log_x,
-            live_log_psi,
+            live_log_psi0,
             self.n_live,
         )
         history = RunHistory(
             iteration=np.arange(1, niter + 1, dtype=np.int64),
-            discarded_log_psi=np.asarray(dead_log_psi),
+            discarded_log_psi=np.asarray(dead_log_psi0),
             log_x=np.asarray(dead_log_x),
             log_delta_x=np.asarray(dead_log_delta_x),
             logz_dead=np.asarray(history_logz_dead),
@@ -447,6 +514,13 @@ class MINSampler:
             likelihood_calls=np.asarray(history_likelihood_calls, dtype=np.int64),
             acceptance_fraction=np.asarray(history_acceptance),
             elapsed_seconds=np.asarray(history_elapsed),
+            proposal_revision=np.asarray(history_proposal_revision, dtype=np.int64),
+            proposal_update_attempts=np.asarray(
+                history_proposal_update_attempts, dtype=np.int64
+            ),
+            proposal_update_failures=np.asarray(
+                history_proposal_update_failures, dtype=np.int64
+            ),
         )
         success = termination_reason in SCIENTIFIC_TERMINATION_REASONS
         warnings = [
@@ -463,7 +537,12 @@ class MINSampler:
                 "randomized_plateau augments the pseudo-prior with stored "
                 "Uniform(0, 1) tie breakers."
             )
-        proposal_metadata = getattr(self.proposal, "metadata", None)
+        importance_metadata = getattr(self.importance_morph, "metadata", None)
+        proposal_updates = (
+            ()
+            if self.adaptive_proposal_controller is None
+            else self.adaptive_proposal_controller.records
+        )
         final_state = copy.deepcopy(self.rng.bit_generator.state)
         ndim = self.model.ndim
         return MINSResult(
@@ -480,16 +559,16 @@ class MINSampler:
             dead_points=np.asarray(dead_points, dtype=float).reshape(niter, ndim),
             dead_log_likelihood=np.asarray(dead_log_likelihood),
             dead_log_prior=np.asarray(dead_log_prior),
-            dead_log_q=np.asarray(dead_log_q),
-            dead_log_psi=np.asarray(dead_log_psi),
+            dead_log_q0=np.asarray(dead_log_q0),
+            dead_log_psi0=np.asarray(dead_log_psi0),
             dead_tie_breakers=np.asarray(dead_tie_breakers),
             dead_log_x=np.asarray(dead_log_x),
             dead_log_weights=np.asarray(dead_log_weights),
             final_live_points=live_theta,
             final_live_log_likelihood=live_log_likelihood,
             final_live_log_prior=live_log_prior,
-            final_live_log_q=live_log_q,
-            final_live_log_psi=live_log_psi,
+            final_live_log_q0=live_log_q0,
+            final_live_log_psi0=live_log_psi0,
             final_live_tie_breakers=live_tie_breakers,
             log_posterior_weights=quadrature.log_posterior_weights,
             history=history,
@@ -497,7 +576,8 @@ class MINSampler:
             rng_bit_generator=self.rng.bit_generator.__class__.__name__,
             rng_state_initial=repr(initial_state),
             rng_state_final=repr(final_state),
-            proposal_description=repr(proposal_metadata),
+            importance_morph_description=repr(importance_metadata),
+            proposal_updates=proposal_updates,
             nonfinite_counts=(
                 ("outside_prior", evaluator.outside_prior),
                 ("zero_likelihood", evaluator.zero_likelihood),

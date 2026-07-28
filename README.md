@@ -3,10 +3,10 @@
 MINS is an experimental implementation of Morph-assisted nested importance
 sampling for post-processing Bayesian posterior samples.
 
-> **Development status:** pre-alpha research software. The Phase 2 method uses
-> a fixed, non-defensive Morph density. Missing proposal support can bias the
-> evidence estimate, and the API is not yet stable. No PyPI release has been
-> made.
+> **Development status:** pre-alpha research software. The importance Morph is
+> fixed and non-defensive. Missing importance support can bias the evidence
+> estimate. The optional adaptive proposal scheme is heuristic and can add
+> further bias; the API is not yet stable and no PyPI release has been made.
 
 ## Installation
 
@@ -52,12 +52,18 @@ model = CallableModel(
 )
 
 posterior_samples = np.random.default_rng(7).normal(size=(2_000, 1))
-proposal = MorphProposal.fit(
+importance_morph = MorphProposal.fit(
     posterior_samples,
     param_names=model.parameter_names,
     groups=[],
 )
-sampler = MINSampler(model, proposal, n_live=100, rng=42)
+sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="fixed_morph",
+    n_live=100,
+    rng=42,
+)
 result = sampler.run(
     dlogz=1e-3,
     max_iterations=5_000,
@@ -95,6 +101,14 @@ These thresholds are initial calibration choices, not universal constants.
 mean; `remaining_fraction` measures the magnitude of the live contribution.
 They are not interchangeable. See the [stopping guide](docs/stopping.md) for
 the complete API and limitations.
+
+Set `proposal_scheme="adaptive_morph"` to refit a separate proposal Morph from
+the complete equal-weight live set every `proposal_update_interval=25`
+completed iterations. The original `importance_morph` remains fixed and still
+defines `log_q0` and `log_psi0`. Adaptive candidates are accepted directly
+after the `log_psi0` constraint, so this mode is a heuristic: it does not in
+general draw from the constrained importance Morph and its `logZ` may be
+biased.
 
 The progress bar reports iteration, live-point count, likelihood calls,
 proposal efficiency, `logZ`, theoretical `logZerr`, finite-live uncertainty,

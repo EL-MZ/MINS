@@ -13,6 +13,8 @@ def test_public_import_and_version() -> None:
     assert mins.__version__ == "0.1.0.dev3"
     assert mins.Model is not None
     assert mins.Proposal is not None
+    assert mins.RefittableProposal is not None
+    assert mins.ProposalUpdateRecord is not None
 
 
 def test_callable_model_vectorized_and_scalar_agree() -> None:
@@ -72,6 +74,8 @@ def test_rng_reproducibility_is_explicit() -> None:
         ({"n_live": 1}, "n_live"),
         ({"n_live": 2, "dlogz": 0.0}, "dlogz"),
         ({"n_live": 2, "proposal_batch_size": 0}, "proposal_batch_size"),
+        ({"n_live": 2, "proposal_update_interval": 0}, "proposal_update_interval"),
+        ({"n_live": 2, "proposal_scheme": "slice"}, "proposal_scheme"),
         ({"n_live": 5, "max_likelihood_calls": 4}, "max_likelihood_calls"),
         ({"n_live": 2, "tie_policy": "jitter"}, "tie_policy"),
     ],
@@ -79,3 +83,30 @@ def test_rng_reproducibility_is_explicit() -> None:
 def test_config_validation(kwargs: dict[str, object], message: str) -> None:
     with pytest.raises(ConfigurationError, match=message):
         MINSConfig(**kwargs)
+
+
+def test_adaptive_scheme_requires_refittable_importance_morph() -> None:
+    class FixedNormal:
+        ndim = 1
+
+        def sample(self, n: int, rng: np.random.Generator) -> np.ndarray:
+            return rng.normal(size=(n, 1))
+
+        def log_prob(self, theta: np.ndarray) -> np.ndarray:
+            return -0.5 * theta[:, 0] ** 2 - 0.5 * np.log(2.0 * np.pi)
+
+    importance = FixedNormal()
+    model = CallableModel(
+        ndim=1,
+        parameter_names=("x",),
+        log_likelihood_fn=lambda x: np.zeros(len(x)),
+        log_prior_fn=importance.log_prob,
+    )
+    with pytest.raises(TypeError, match="refit"):
+        mins.MINSampler(
+            model=model,
+            importance_morph=importance,
+            proposal_scheme="adaptive_morph",
+            n_live=4,
+            rng=1,
+        )

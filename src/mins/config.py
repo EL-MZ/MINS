@@ -16,6 +16,7 @@ from .stopping import (
 )
 
 TiePolicy = Literal["strict", "randomized_plateau"]
+ProposalScheme = Literal["fixed_morph", "adaptive_morph"]
 
 
 def _validate_dlogz(value: object) -> float:
@@ -42,6 +43,11 @@ class MINSConfig:
         ``dlogz`` is invalid.
     proposal_batch_size
         Number of independent Morph draws evaluated per rejection batch.
+    proposal_scheme
+        Fixed importance-Morph rejection or periodically refitted Morph
+        proposals.
+    proposal_update_interval
+        Completed-iteration interval between adaptive Morph refit attempts.
     max_iterations
         Maximum number of completed dead-point replacements.
     max_proposals_per_replacement
@@ -58,6 +64,8 @@ class MINSConfig:
     dlogz: float | None = None
     stopping: StoppingPolicy | None = None
     proposal_batch_size: int = 64
+    proposal_scheme: ProposalScheme = "fixed_morph"
+    proposal_update_interval: int = 25
     max_iterations: int = 10_000
     max_proposals_per_replacement: int = 100_000
     max_likelihood_calls: int | None = None
@@ -97,12 +105,17 @@ class MINSConfig:
         object.__setattr__(self, "stopping", stopping)
         for name in (
             "proposal_batch_size",
+            "proposal_update_interval",
             "max_iterations",
             "max_proposals_per_replacement",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ConfigurationError(f"{name} must be a positive integer")
+        if self.proposal_scheme not in ("fixed_morph", "adaptive_morph"):
+            raise ConfigurationError(
+                f"unsupported proposal_scheme: {self.proposal_scheme!r}"
+            )
         if self.max_likelihood_calls is not None and (
             isinstance(self.max_likelihood_calls, bool)
             or not isinstance(self.max_likelihood_calls, int)

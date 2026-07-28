@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+from itertools import pairwise
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.special import logsumexp
 
 from .config import MINSConfig
+from .proposals import MorphMetadata
 from .quadrature import live_log_contributions
 from .stopping import SCIENTIFIC_TERMINATION_REASONS
 
@@ -22,6 +24,33 @@ def _readonly(
     array = np.array(values, dtype=dtype, copy=True)
     array.setflags(write=False)
     return array
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalUpdateRecord:
+    """Outcome of one scheduled adaptive proposal-Morph refit."""
+
+    iteration: int
+    success: bool
+    active_revision: int
+    n_training: int
+    proposal_metadata: MorphMetadata | None
+    error_type: str | None = None
+    error_message: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.iteration < 1:
+            raise ValueError("proposal update iteration must be positive")
+        if self.active_revision < 0:
+            raise ValueError("active proposal revision must be nonnegative")
+        if self.n_training < 2:
+            raise ValueError("proposal update requires at least two training rows")
+        if self.success and (
+            self.error_type is not None or self.error_message is not None
+        ):
+            raise ValueError("successful proposal update cannot contain an error")
+        if not self.success and (not self.error_type or self.error_message is None):
+            raise ValueError("failed proposal update must describe its error")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +82,9 @@ class RunHistory:
     likelihood_calls: NDArray[np.int64]
     acceptance_fraction: NDArray[np.float64]
     elapsed_seconds: NDArray[np.float64]
+    proposal_revision: NDArray[np.int64]
+    proposal_update_attempts: NDArray[np.int64]
+    proposal_update_failures: NDArray[np.int64]
 
     def __post_init__(self) -> None:
         lengths: set[int] = set()
@@ -61,6 +93,9 @@ class RunHistory:
             "proposals",
             "likelihood_calls",
             "stopping_streak",
+            "proposal_revision",
+            "proposal_update_attempts",
+            "proposal_update_failures",
         }
         for field in fields(self):
             values = getattr(self, field.name)
@@ -76,7 +111,7 @@ class RunHistory:
 
 @dataclass(frozen=True, slots=True)
 class MINSResult:
-    """Complete immutable output of a fixed-Morph MINS run.
+    """Complete immutable output of a fixed-importance MINS run.
 
     Arrays contain enough cached information to recompute the evidence,
     posterior weights, and information without reevaluating the model.
@@ -95,16 +130,16 @@ class MINSResult:
     dead_points: NDArray[np.float64]
     dead_log_likelihood: NDArray[np.float64]
     dead_log_prior: NDArray[np.float64]
-    dead_log_q: NDArray[np.float64]
-    dead_log_psi: NDArray[np.float64]
+    dead_log_q0: NDArray[np.float64]
+    dead_log_psi0: NDArray[np.float64]
     dead_tie_breakers: NDArray[np.float64]
     dead_log_x: NDArray[np.float64]
     dead_log_weights: NDArray[np.float64]
     final_live_points: NDArray[np.float64]
     final_live_log_likelihood: NDArray[np.float64]
     final_live_log_prior: NDArray[np.float64]
-    final_live_log_q: NDArray[np.float64]
-    final_live_log_psi: NDArray[np.float64]
+    final_live_log_q0: NDArray[np.float64]
+    final_live_log_psi0: NDArray[np.float64]
     final_live_tie_breakers: NDArray[np.float64]
     log_posterior_weights: NDArray[np.float64]
     history: RunHistory
@@ -112,14 +147,15 @@ class MINSResult:
     rng_bit_generator: str
     rng_state_initial: str
     rng_state_final: str
-    proposal_description: str
+    importance_morph_description: str
+    proposal_updates: tuple[ProposalUpdateRecord, ...]
     nonfinite_counts: tuple[tuple[str, int], ...]
     warnings: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if self.nlive != self.config.n_live:
             raise ValueError("nlive must equal config.n_live")
-        if self.niter < 0 or self.niter != len(self.dead_log_psi):
+        if self.niter < 0 or self.niter != len(self.dead_log_psi0):
             raise ValueError("niter must equal the number of dead points")
         if len(self.history.iteration) != self.niter:
             raise ValueError("history length must equal niter")
@@ -133,8 +169,8 @@ class MINSResult:
         dead_fields = (
             "dead_log_likelihood",
             "dead_log_prior",
-            "dead_log_q",
-            "dead_log_psi",
+            "dead_log_q0",
+            "dead_log_psi0",
             "dead_tie_breakers",
             "dead_log_x",
             "dead_log_weights",
@@ -142,8 +178,8 @@ class MINSResult:
         live_fields = (
             "final_live_log_likelihood",
             "final_live_log_prior",
-            "final_live_log_q",
-            "final_live_log_psi",
+            "final_live_log_q0",
+            "final_live_log_psi0",
             "final_live_tie_breakers",
         )
         for name in matrix_fields:
@@ -171,7 +207,7 @@ class MINSResult:
             raise ValueError("log_posterior_weights must have shape (niter + nlive,)")
         object.__setattr__(self, "log_posterior_weights", log_weights)
 
-        if self.niter and np.any(np.diff(self.dead_log_psi) < 0.0):
+        if self.niter and np.any(np.diff(self.dead_log_psi0) < 0.0):
             raise ValueError("dead pseudo-likelihood thresholds must be monotone")
         if not np.isclose(
             logsumexp(self.log_posterior_weights), 0.0, rtol=0.0, atol=1e-11
@@ -183,7 +219,7 @@ class MINSResult:
                 np.concatenate(
                     (
                         self.dead_log_weights,
-                        live_log_contributions(log_x, self.final_live_log_psi),
+                        live_log_contributions(log_x, self.final_live_log_psi0),
                     )
                 )
             )
@@ -195,6 +231,13 @@ class MINSResult:
             raise ValueError(
                 "success must correspond to scientific stopping termination"
             )
+        updates = tuple(self.proposal_updates)
+        if any(
+            current.iteration <= previous.iteration
+            for previous, current in pairwise(updates)
+        ):
+            raise ValueError("proposal updates must have increasing iterations")
+        object.__setattr__(self, "proposal_updates", updates)
 
     @property
     def posterior_weights(self) -> NDArray[np.float64]:
@@ -211,9 +254,9 @@ class MINSResult:
         return values
 
     @property
-    def all_log_psi(self) -> NDArray[np.float64]:
-        """Return dead then final-live pseudo-likelihood values."""
-        values = np.concatenate((self.dead_log_psi, self.final_live_log_psi))
+    def all_log_psi0(self) -> NDArray[np.float64]:
+        """Return dead then final-live fixed-importance pseudo-likelihoods."""
+        values = np.concatenate((self.dead_log_psi0, self.final_live_log_psi0))
         values.setflags(write=False)
         return values
 

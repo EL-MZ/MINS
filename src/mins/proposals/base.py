@@ -26,3 +26,14 @@ class Proposal(Protocol):
         theta: NDArray[np.float64],
     ) -> NDArray[np.float64]:
         """Return normalized log density for points shaped ``(n, ndim)``."""
+
+
+@runtime_checkable
+class RefittableProposal(Proposal, Protocol):
+    """Normalized proposal supporting a non-mutating fit to new samples."""
+
+    def refit(
+        self,
+        training_theta: NDArray[np.float64],
+    ) -> Proposal:
+        """Return a new fitted proposal without changing this instance."""

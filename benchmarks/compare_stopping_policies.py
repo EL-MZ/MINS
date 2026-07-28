@@ -102,8 +102,8 @@ def run_case(
 ) -> dict[str, Any]:
     model, proposal = eggbox_model()
     sampler = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=n_live,
         rng=seed,
         proposal_batch_size=512,

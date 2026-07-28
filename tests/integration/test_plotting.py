@@ -21,8 +21,8 @@ def test_plots_return_figures_without_showing() -> None:
         log_prior_fn=proposal.log_prob,
     )
     result = MINSampler(
-        model,
-        proposal,
+        model=model,
+        importance_morph=proposal,
         n_live=8,
         rng=3,
         tie_policy="randomized_plateau",

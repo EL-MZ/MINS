@@ -1,4 +1,4 @@
-# Fixed-Morph evidence tutorial
+# Fixed-importance Morph evidence tutorial
 
 Phase 2 estimates evidence after posterior sampling. It does not discover a
 posterior from the original prior.
@@ -28,10 +28,10 @@ model = CallableModel(
 Both functions receive `(n, 2)` batches and return `(n,)`. Include all prior
 normalization constants.
 
-## 3. Fit MorphZ once
+## 3. Fit the importance Morph once
 
 ```python
-proposal = MorphProposal.fit(
+importance_morph = MorphProposal.fit(
     posterior_samples,
     morph_type="2_group",
     param_names=model.parameter_names,
@@ -40,15 +40,16 @@ proposal = MorphProposal.fit(
 ```
 
 MorphZ computes all second-order total correlations, greedily selects disjoint
-groups, and fits one fixed `GroupKDE`. Sampling and normalized log-density
-evaluation come from that same fitted object.
+groups, and fits one fixed `GroupKDE`. This object remains the importance
+density `q0` for the complete run.
 
 ## 4. Run
 
 ```python
 sampler = MINSampler(
-    model,
-    proposal,
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="fixed_morph",
     n_live=500,
     rng=np.random.default_rng(42),
 )
@@ -85,7 +86,27 @@ result.history.information
 result.history.remaining_fraction
 result.history.acceptance_fraction
 result.history.likelihood_calls
+result.history.proposal_revision
 ```
+
+To experiment with periodic live-set proposal fits, select:
+
+```python
+sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="adaptive_morph",
+    proposal_update_interval=25,
+    n_live=500,
+    rng=np.random.default_rng(42),
+)
+```
+
+The proposal is refitted from all current live rows before replacements 26,
+51, 76, and so on. The original importance Morph still computes every
+`log_q0` and `log_psi0`. Threshold-only adaptive acceptance is heuristic,
+however: it samples from the refitted proposal under the constraint rather
+than from constrained `q0`, so the resulting `logZ` can be biased.
 
 ## 5. Obtain equal-weight posterior samples
 

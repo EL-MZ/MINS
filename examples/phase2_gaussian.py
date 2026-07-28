@@ -34,15 +34,15 @@ def main() -> None:
     posterior_variance = 0.8
     training_rng = np.random.default_rng(50)
     training = training_rng.normal(scale=np.sqrt(posterior_variance), size=(300, 1))
-    proposal = MorphProposal.fit(
+    importance_morph = MorphProposal.fit(
         training,
         groups=[],
         param_names=("x",),
         kde_bw="silverman",
     )
     result = MINSampler(
-        build_model(),
-        proposal,
+        model=build_model(),
+        importance_morph=importance_morph,
         n_live=25,
         rng=12,
         proposal_batch_size=16,

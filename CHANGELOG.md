@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+- Split the frozen importance Morph from the active constrained-sampling Morph.
+- Added fixed and periodically refitted live-set Morph proposal schemes.
+- Renamed stored density and pseudo-likelihood arrays to explicit `log_q0` and
+  `log_psi0` forms and added proposal-update diagnostics.
+
 ## 0.1.0.dev3 - 2026-07-25
 
 - Added automatic MorphZ total-correlation and greedy group selection through

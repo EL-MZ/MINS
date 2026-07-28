@@ -40,7 +40,7 @@ def summarize(result: MINSResult) -> RunDiagnostics:
     acceptance = result.niter / result.n_proposals if result.n_proposals else 0.0
     maximum_proposals = int(np.max(result.history.proposals)) if result.niter else 0
     log_x = -result.niter / result.nlive
-    conservative = log_x + float(np.max(result.final_live_log_psi))
+    conservative = log_x + float(np.max(result.final_live_log_psi0))
     if result.niter:
         final_remaining_fraction = float(result.history.remaining_fraction[-1])
         final_live_ess = float(result.history.live_ess[-1])
@@ -60,7 +60,7 @@ def summarize(result: MINSResult) -> RunDiagnostics:
         relative_posterior_ess=ess / n_weighted,
         proposal_acceptance_fraction=acceptance,
         maximum_proposals_per_replacement=maximum_proposals,
-        thresholds_monotone=bool(np.all(np.diff(result.dead_log_psi) >= 0.0)),
+        thresholds_monotone=bool(np.all(np.diff(result.dead_log_psi0) >= 0.0)),
         conservative_log_remaining=conservative,
         final_remaining_fraction=final_remaining_fraction,
         final_live_ess=final_live_ess,

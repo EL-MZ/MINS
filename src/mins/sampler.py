@@ -164,8 +164,9 @@ class MINSampler:
         Parameters
         ----------
         dlogz
-            Legacy remaining-evidence-fraction stopping tolerance. When both
-            ``dlogz`` and ``stopping`` are omitted, this defaults to ``1e-3``.
+            Maximum estimated change in log evidence caused by adding the
+            current mean-live remaining-evidence estimate. When both ``dlogz``
+            and ``stopping`` are omitted, this defaults to ``1e-3``.
         stopping
             Optional multi-criterion scientific stopping policy. It cannot be
             supplied together with ``dlogz``.
@@ -270,6 +271,7 @@ class MINSampler:
         history_information: list[float] = []
         history_logzerr: list[float] = []
         history_remaining_fraction: list[float] = []
+        history_remaining_dlogz: list[float] = []
         history_live_ess: list[float] = []
         history_live_mean_rse: list[float] = []
         history_live_logz_error: list[float] = []
@@ -393,6 +395,7 @@ class MINSampler:
             )
             stopping_metrics = calculate_stopping_metrics(
                 live_log_psi=live_log_psi0,
+                logz_dead=logz_dead,
                 logz_live=logz_live,
                 logz_total=logz_total,
                 logz_history=stability_history,
@@ -413,6 +416,7 @@ class MINSampler:
             history_information.append(information)
             history_logzerr.append(logzerr)
             history_remaining_fraction.append(stopping_metrics.remaining_fraction)
+            history_remaining_dlogz.append(stopping_metrics.remaining_dlogz)
             history_live_ess.append(stopping_metrics.live_ess)
             history_live_mean_rse.append(stopping_metrics.live_mean_rse)
             history_live_logz_error.append(stopping_metrics.live_logz_error)
@@ -455,6 +459,7 @@ class MINSampler:
                 "logz_dead": logz_dead,
                 "logz_live": logz_live,
                 "remaining_fraction": stopping_metrics.remaining_fraction,
+                "remaining_dlogz": stopping_metrics.remaining_dlogz,
                 "live_ess": stopping_metrics.live_ess,
                 "live_mean_rse": stopping_metrics.live_mean_rse,
                 "live_logz_error": stopping_metrics.live_logz_error,
@@ -502,6 +507,7 @@ class MINSampler:
             information=np.asarray(history_information),
             logzerr=np.asarray(history_logzerr),
             remaining_fraction=np.asarray(history_remaining_fraction),
+            remaining_dlogz=np.asarray(history_remaining_dlogz),
             live_ess=np.asarray(history_live_ess),
             live_mean_rse=np.asarray(history_live_mean_rse),
             live_logz_error=np.asarray(history_live_logz_error),

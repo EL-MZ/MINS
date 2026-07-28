@@ -7,7 +7,8 @@ The Phase 2 regression uses:
 - analytic evidence: `0.875`, so `logz = -0.1335313926`;
 - tie policy: `randomized_plateau`;
 - seed: `2026`;
-- `n_live=40`, `dlogz=0.05`, proposal batch size `32`;
+- `n_live=40`, remaining-log-evidence tolerance `dlogz=0.05`, proposal batch
+  size `32`;
 - at most 500 iterations and 20,000 proposals per replacement.
 
 This deliberately exercises exact pseudo-likelihood ties. The strict policy is
@@ -23,4 +24,3 @@ PYTHONPATH=src python -m pytest \
 The supplied repository contained no previous prototype or stored regression
 summary, so this documented analytic target is a new Phase 2 fixture rather
 than a claim of equivalence to an unavailable experiment.
-

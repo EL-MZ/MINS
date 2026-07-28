@@ -78,29 +78,34 @@ equal_samples = result.resample_equal(
 )
 ```
 
-The legacy `dlogz` interface remains the default scientific behavior. A
-multi-criterion policy is available as an opt-in experimental alternative:
+The `dlogz` interface remains the default scientific behavior. It bounds the
+estimated log-evidence increment from adding the mean-live remainder,
+`log(Z_dead + Z_live) - log(Z_dead)`. A multi-criterion policy is available as
+an opt-in experimental alternative:
 
 ```python
+n_live = sampler.n_live
 stopping = StoppingPolicy(
     criteria=(
-        StoppingCriterionConfig("live_logz_error", 5e-3),
-        StoppingCriterionConfig("remaining_fraction", 5e-2),
+        StoppingCriterionConfig("remaining_dlogz", 1e-2),
+        StoppingCriterionConfig("live_logz_error", 2e-3),
         StoppingCriterionConfig("logz_stability", 5e-3),
     ),
     mode="all",
     consecutive=3,
-    min_iterations=10,
-    stability_window=10,
+    min_iterations=n_live,
+    stability_window=n_live,
 )
 result = sampler.run(stopping=stopping, max_iterations=20_000)
 ```
 
-These thresholds are initial calibration choices, not universal constants.
+These thresholds are illustrative calibration choices, not universal
+constants; calibrate them with repeated runs for the target family.
+`remaining_dlogz` is the estimated log-evidence correction,
 `live_logz_error` estimates uncertainty transmitted from the finite live-set
-mean; `remaining_fraction` measures the magnitude of the live contribution.
-They are not interchangeable. See the [stopping guide](docs/stopping.md) for
-the complete API and limitations.
+mean, and `remaining_fraction` remains available separately for the live
+evidence share. See the [stopping guide](docs/stopping.md) for the complete API
+and limitations.
 
 Set `proposal_scheme="adaptive_morph"` to refit a separate proposal Morph from
 the complete equal-weight live set every `proposal_update_interval=25`
@@ -112,7 +117,8 @@ biased.
 
 The progress bar reports iteration, live-point count, likelihood calls,
 proposal efficiency, `logZ`, theoretical `logZerr`, finite-live uncertainty,
-remaining-evidence fraction, live ESS, and the stopping streak.
+remaining log-evidence increment, remaining-evidence fraction, live ESS, and
+the stopping streak.
 
 `result.all_points` and `result.posterior_weights` are the primary weighted
 posterior representation. `result.resample_equal(...)` provides reproducible
@@ -140,7 +146,7 @@ Phase reports and exact validation commands are stored under
 The non-CI eggbox comparison in
 [`benchmarks/compare_stopping_policies.py`](benchmarks/compare_stopping_policies.py)
 records repeated-seed accuracy, cost, failure-rate, and speed-up summaries for
-the legacy, looser remaining-fraction, and hybrid policies.
+two `remaining_dlogz` tolerances and a hybrid policy.
 
 ## License
 

@@ -86,23 +86,27 @@ result = sampler.run(
 )
 ```
 
-`dlogz` and `stopping` are mutually exclusive. Omitting both preserves the
-legacy `dlogz=1e-3` behavior. The multi-criterion API uses immutable
+`dlogz` is the maximum estimated change in log evidence caused by adding the
+current mean-live remaining-evidence estimate:
+`log(Z_dead + Z_live) - log(Z_dead)`. It must be positive and finite.
+`dlogz` and `stopping` are mutually exclusive. Omitting both uses
+`dlogz=1e-3`. The multi-criterion API uses immutable
 `StoppingCriterionConfig` and `StoppingPolicy` values:
 
 ```python
 from mins import StoppingCriterionConfig, StoppingPolicy
 
+n_live = sampler.n_live
 stopping = StoppingPolicy(
     criteria=(
-        StoppingCriterionConfig("live_logz_error", 5e-3),
-        StoppingCriterionConfig("remaining_fraction", 5e-2),
+        StoppingCriterionConfig("remaining_dlogz", 1e-2),
+        StoppingCriterionConfig("live_logz_error", 2e-3),
         StoppingCriterionConfig("logz_stability", 5e-3),
     ),
     mode="all",
     consecutive=3,
-    min_iterations=10,
-    stability_window=10,
+    min_iterations=n_live,
+    stability_window=n_live,
 )
 result = sampler.run(
     stopping=stopping,
@@ -144,16 +148,17 @@ Progress is silent by default. `progress=True` enables an optional
 - iteration and `n_live`;
 - likelihood calls and constrained-proposal efficiency;
 - current total `logZ` and theoretical `logZerr`;
-- live-set log-evidence error and remaining-evidence fraction;
+- live-set log-evidence error, remaining log-evidence increment, and
+  remaining-evidence fraction;
 - live-point ESS;
 - the current stopping streak and required consecutive count.
 
 A custom callable can be passed instead of `True`. It receives a mapping after
 every completed iteration with the displayed quantities plus
-`live_mean_rse`, `logz_stability`, dead/live evidence, per-iteration proposal
-counts, live `logPsi` range, and elapsed time. It also receives integer met
-flags named `criterion_<name>_met` for each enabled criterion. Library code
-does not otherwise print, display, or write files.
+`remaining_dlogz`, `live_mean_rse`, `logz_stability`, dead/live evidence,
+per-iteration proposal counts, live `logPsi` range, and elapsed time. It also
+receives integer met flags named `criterion_<name>_met` for each enabled
+criterion. Library code does not otherwise print, display, or write files.
 
 Progress mappings and `RunHistory` also include `proposal_revision`,
 `proposal_update_attempts`, and `proposal_update_failures`.
@@ -194,18 +199,19 @@ Repeated points are expected. Retain the original points and weights for
 highest-fidelity posterior summaries.
 
 `RunHistory` stores every completed threshold, volume interval, cumulative
-dead/live/total log evidence, information, `logzerr`, remaining fraction, live
-pseudo-likelihood ESS, live-mean RSE, live log-evidence error, log-evidence
-stability, stopping streak, live pseudo-likelihood range, calls, proposal
-counts, acceptance fraction, elapsed time, and proposal update counters. Every
-array is read-only and has shape `(niter,)`; early `logz_stability` entries are
-`NaN` until its exact window is available.
+dead/live/total log evidence, information, `logzerr`, remaining fraction,
+remaining log-evidence increment, live pseudo-likelihood ESS, live-mean RSE,
+live log-evidence error, log-evidence stability, stopping streak, live
+pseudo-likelihood range, calls, proposal counts, acceptance fraction, elapsed
+time, and proposal update counters. Every array is read-only and has shape
+`(niter,)`; early `logz_stability` entries are `NaN` until its exact window is
+available.
 
 ## Failure semantics
 
 Scientific termination reasons are:
 
-- `remaining_evidence` for the legacy `dlogz` path;
+- `remaining_evidence` for the `dlogz` path;
 - `stopping_criteria` for an explicit `StoppingPolicy`.
 
 Both have `success=True`. Hard stops include:

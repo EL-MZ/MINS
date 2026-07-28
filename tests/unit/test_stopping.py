@@ -14,6 +14,7 @@ from mins import (
 )
 from mins.stopping import (
     StoppingMetrics,
+    calculate_remaining_dlogz,
     calculate_stopping_metrics,
     evaluate_stopping_policy,
 )
@@ -24,6 +25,7 @@ pytestmark = pytest.mark.unit
 def _metrics(
     *,
     remaining_fraction: float = 0.1,
+    remaining_dlogz: float = 0.1,
     live_ess: float = 8.0,
     live_logz_error: float = 0.01,
     logz_stability: float = 0.02,
@@ -31,6 +33,7 @@ def _metrics(
 ) -> StoppingMetrics:
     return StoppingMetrics(
         remaining_fraction=remaining_fraction,
+        remaining_dlogz=remaining_dlogz,
         live_ess=live_ess,
         live_mean_rse=0.1,
         live_logz_error=live_logz_error,
@@ -51,6 +54,11 @@ def _calculate(
     )
     return calculate_stopping_metrics(
         live_log_psi=live_log_psi,
+        logz_dead=(
+            -np.inf
+            if np.all(np.isneginf(live_log_psi))
+            else float(np.log1p(-remaining_fraction))
+        ),
         logz_live=float(logz_live),
         logz_total=0.0,
         logz_history=[0.0] if history is None else history,
@@ -84,6 +92,7 @@ def test_one_dominant_live_value_has_unit_ess_and_scaled_error() -> None:
 def test_all_zero_live_contributions_have_defined_zero_uncertainty() -> None:
     metrics = calculate_stopping_metrics(
         live_log_psi=[-np.inf] * 6,
+        logz_dead=-np.inf,
         logz_live=-np.inf,
         logz_total=-np.inf,
         logz_history=[],
@@ -91,6 +100,7 @@ def test_all_zero_live_contributions_have_defined_zero_uncertainty() -> None:
         stability_window=3,
     )
     assert metrics.remaining_fraction == 0.0
+    assert np.isposinf(metrics.remaining_dlogz)
     assert metrics.live_ess == 6.0
     assert metrics.live_mean_rse == 0.0
     assert metrics.live_logz_error == 0.0
@@ -109,15 +119,75 @@ def test_ess_is_stable_under_large_common_log_offsets() -> None:
 
 
 def test_remaining_fraction_matches_log_evidence_ratio() -> None:
+    logz_live = -4.0
+    logz_total = -3.25
     metrics = calculate_stopping_metrics(
         live_log_psi=[-1.0, -2.0, -3.0],
-        logz_live=-4.0,
-        logz_total=-3.25,
-        logz_history=[-3.25],
+        logz_dead=logz_total + np.log1p(-np.exp(logz_live - logz_total)),
+        logz_live=logz_live,
+        logz_total=logz_total,
+        logz_history=[logz_total],
         logzerr=0.1,
         stability_window=2,
     )
-    assert metrics.remaining_fraction == pytest.approx(np.exp(-4.0 + 3.25))
+    assert metrics.remaining_fraction == pytest.approx(np.exp(logz_live - logz_total))
+    assert metrics.remaining_dlogz == pytest.approx(
+        -np.log1p(-metrics.remaining_fraction)
+    )
+
+
+def test_remaining_dlogz_matches_log_evidence_increment() -> None:
+    value = calculate_remaining_dlogz(
+        logz_dead=np.log(9.0),
+        logz_live=np.log(1.0),
+    )
+
+    expected = np.log(10.0) - np.log(9.0)
+    assert np.isclose(value, expected)
+
+
+@pytest.mark.parametrize("remaining_fraction", [1e-8, 1e-3, 0.01, 0.1, 0.5, 0.9])
+def test_remaining_dlogz_matches_remaining_fraction_identity(
+    remaining_fraction: float,
+) -> None:
+    value = calculate_remaining_dlogz(
+        logz_dead=np.log(1.0 - remaining_fraction),
+        logz_live=np.log(remaining_fraction),
+    )
+
+    assert value == pytest.approx(-np.log1p(-remaining_fraction))
+
+
+def test_remaining_dlogz_is_zero_for_zero_live_evidence() -> None:
+    value = calculate_remaining_dlogz(logz_dead=0.0, logz_live=-np.inf)
+
+    assert value == 0.0
+
+
+@pytest.mark.parametrize("logz_live", [0.0, -np.inf])
+def test_remaining_dlogz_is_infinite_without_dead_evidence(
+    logz_live: float,
+) -> None:
+    value = calculate_remaining_dlogz(logz_dead=-np.inf, logz_live=logz_live)
+
+    assert np.isposinf(value)
+
+
+@pytest.mark.parametrize(
+    ("logz_dead", "logz_live"),
+    [
+        (np.nan, 0.0),
+        (0.0, np.nan),
+        (np.inf, 0.0),
+        (0.0, np.inf),
+    ],
+)
+def test_remaining_dlogz_rejects_invalid_values(
+    logz_dead: float,
+    logz_live: float,
+) -> None:
+    with pytest.raises(NumericalInvariantError):
+        calculate_remaining_dlogz(logz_dead=logz_dead, logz_live=logz_live)
 
 
 def test_stability_requires_the_exact_full_window() -> None:
@@ -139,6 +209,7 @@ def test_stability_requires_the_exact_full_window() -> None:
     ("name", "tolerance", "metrics"),
     [
         ("remaining_fraction", 0.1, _metrics(remaining_fraction=0.1)),
+        ("remaining_dlogz", 0.1, _metrics(remaining_dlogz=0.1)),
         ("live_logz_error", 0.1, _metrics(live_logz_error=0.1)),
         ("logz_stability", 0.1, _metrics(logz_stability=0.1)),
         ("logzerr", 0.1, _metrics(logzerr=0.1)),
@@ -264,6 +335,35 @@ def test_unavailable_stability_is_unmet() -> None:
     assert not decision.evaluations[0].met
 
 
+def test_infinite_remaining_dlogz_is_unmet() -> None:
+    decision = evaluate_stopping_policy(
+        metrics=_metrics(remaining_dlogz=np.inf),
+        policy=StoppingPolicy(
+            criteria=(StoppingCriterionConfig("remaining_dlogz", 0.1),)
+        ),
+        niter=1,
+        previous_streak=0,
+    )
+
+    assert not decision.evaluations[0].met
+    assert not decision.should_stop
+
+
+@pytest.mark.parametrize("value", [np.nan, -np.inf])
+def test_invalid_nonpositive_infinite_remaining_dlogz_metric_raises(
+    value: float,
+) -> None:
+    with pytest.raises(NumericalInvariantError, match="must be finite"):
+        evaluate_stopping_policy(
+            metrics=_metrics(remaining_dlogz=value),
+            policy=StoppingPolicy(
+                criteria=(StoppingCriterionConfig("remaining_dlogz", 0.1),)
+            ),
+            niter=1,
+            previous_streak=0,
+        )
+
+
 @pytest.mark.parametrize(
     ("factory", "message"),
     [
@@ -332,6 +432,11 @@ def test_policy_validation_rejects_invalid_configuration(
         ("remaining_fraction", 0.0),
         ("remaining_fraction", 1.0),
         ("remaining_fraction", np.nan),
+        ("remaining_dlogz", 0.0),
+        ("remaining_dlogz", -1.0),
+        ("remaining_dlogz", np.nan),
+        ("remaining_dlogz", np.inf),
+        ("remaining_dlogz", True),
         ("live_logz_error", 0.0),
         ("live_logz_error", np.inf),
         ("logz_stability", np.nan),
@@ -357,23 +462,38 @@ def test_config_rejects_live_ess_target_above_n_live() -> None:
 
 def test_config_resolves_legacy_and_rejects_ambiguous_stopping() -> None:
     default = MINSConfig(n_live=10)
-    explicit = MINSConfig(n_live=10, dlogz=0.02)
+    explicit = MINSConfig(n_live=10, dlogz=2.0)
     policy = StoppingPolicy(criteria=(StoppingCriterionConfig("logzerr", 0.1),))
     assert default.dlogz == 1.0e-3
     assert default.stopping is not None
+    assert default.stopping.criteria[0].name == "remaining_dlogz"
     assert default.stopping.criteria[0].tolerance == 1.0e-3
     assert explicit.stopping is not None
-    assert explicit.stopping.criteria[0].tolerance == 0.02
+    assert explicit.stopping.criteria[0].name == "remaining_dlogz"
+    assert explicit.stopping.criteria[0].tolerance == 2.0
+    remaining_fraction = StoppingPolicy(
+        criteria=(StoppingCriterionConfig("remaining_fraction", 0.02),)
+    )
+    assert MINSConfig(n_live=10, stopping=remaining_fraction).stopping == (
+        remaining_fraction
+    )
     with pytest.raises(ConfigurationError, match="dlogz and stopping"):
         MINSConfig(n_live=10, dlogz=0.1, stopping=policy)
     with pytest.raises(ConfigurationError, match="dlogz"):
         MINSConfig(n_live=10, dlogz=True)
 
 
+@pytest.mark.parametrize("dlogz", [0.0, -0.1, np.nan, np.inf, True])
+def test_config_rejects_invalid_dlogz(dlogz: Any) -> None:
+    with pytest.raises(ConfigurationError, match="positive finite"):
+        MINSConfig(n_live=10, dlogz=dlogz)
+
+
 def test_inconsistent_nonfinite_metric_state_raises_typed_error() -> None:
     with pytest.raises(NumericalInvariantError, match="all-zero"):
         calculate_stopping_metrics(
             live_log_psi=[-np.inf, -np.inf],
+            logz_dead=0.0,
             logz_live=0.0,
             logz_total=0.0,
             logz_history=[0.0],

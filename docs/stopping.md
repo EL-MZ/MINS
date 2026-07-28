@@ -1,12 +1,12 @@
 # Stopping criteria
 
-MINS retains its legacy scientific behavior by default:
+MINS uses a single remaining-log-evidence-increment criterion by default:
 
 ```python
 result = sampler.run(dlogz=1e-3)
 ```
 
-This is equivalent to a single `remaining_fraction <= 1e-3` criterion and
+This is equivalent to a single `remaining_dlogz <= 1e-3` criterion and
 retains `termination_reason="remaining_evidence"`. Omitting `dlogz` also uses
 `1e-3`.
 
@@ -15,16 +15,17 @@ The multi-criterion API is opt-in:
 ```python
 from mins import StoppingCriterionConfig, StoppingPolicy
 
+n_live = sampler.n_live
 stopping = StoppingPolicy(
     criteria=(
-        StoppingCriterionConfig("live_logz_error", 5e-3),
-        StoppingCriterionConfig("remaining_fraction", 5e-2),
+        StoppingCriterionConfig("remaining_dlogz", 1e-2),
+        StoppingCriterionConfig("live_logz_error", 2e-3),
         StoppingCriterionConfig("logz_stability", 5e-3),
     ),
     mode="all",
     consecutive=3,
-    min_iterations=10,
-    stability_window=10,
+    min_iterations=n_live,
+    stability_window=n_live,
 )
 result = sampler.run(
     stopping=stopping,
@@ -34,15 +35,30 @@ result = sampler.run(
 
 This recommended experimental configuration says that:
 
-1. estimated live-set uncertainty transmitted to `logZ` is at most `0.005`;
-2. live points represent at most 5% of current total evidence;
-3. the range of the last ten total `logZ` estimates is at most `0.005`;
+1. the mean-live remainder would change accumulated `logZ` by at most `0.01`;
+2. estimated live-set uncertainty transmitted to `logZ` is at most `0.002`;
+3. the range of the last `n_live` total `logZ` estimates is at most `0.005`;
 4. every condition holds for three consecutive completed iterations.
 
-These values are initial calibration choices, not universally valid constants.
-They should be benchmarked for the target family, proposal, and live count.
+These values are illustrative calibration choices, not universally valid
+constants. They require repeated-run calibration for the target family,
+proposal, and live count.
 
 ## Metrics
+
+### Remaining log-evidence increment
+
+\[
+\Delta\log Z_{\rm rem}
+=\log(Z_{\rm dead}+Z_{\rm live})-\log Z_{\rm dead}
+=\log\left(1+\frac{Z_{\rm live}}{Z_{\rm dead}}\right).
+\]
+
+`remaining_dlogz <= tolerance` estimates the maximum change in the accumulated
+dead-point log evidence caused by adding the current mean-live remainder. It is
+measured in natural-log units, and its tolerance must be positive and finite;
+it need not be less than one. Before any finite positive dead evidence has
+been accumulated, its value is `+inf` and the criterion cannot pass.
 
 ### Remaining fraction
 
@@ -53,6 +69,16 @@ f_{\rm live}=\frac{Z_{\rm live}}{Z_{\rm total}}.
 `remaining_fraction <= tolerance` measures the magnitude of the live evidence
 contribution. It does not directly estimate evidence uncertainty. Its
 tolerance must be strictly between zero and one.
+
+The two metrics are related exactly by
+
+\[
+\mathtt{remaining\_dlogz}
+=-\log(1-\mathtt{remaining\_fraction}),
+\]
+
+when the remaining fraction lies strictly between zero and one. They are
+similar only for a small live remainder and remain independently selectable.
 
 ### Live effective sample size and mean RSE
 
@@ -94,8 +120,8 @@ does not include:
 - correlated or invalid constrained draws.
 
 Equal finite live contributions have zero empirical live-mean uncertainty.
-The recommended remaining-fraction guard prevents that fact alone from causing
-immediate termination.
+The recommended `remaining_dlogz` completion guard prevents that fact alone
+from causing immediate termination.
 
 ### Evidence stability
 
@@ -156,11 +182,11 @@ replacement.
 ## Results, progress, and hard limits
 
 `result.config.stopping` contains the fully resolved immutable policy.
-`RunHistory` stores `remaining_fraction`, `live_ess`, `live_mean_rse`,
-`live_logz_error`, `logz_stability`, `logzerr`, and `stopping_streak` for every
-completed iteration. Progress callbacks receive the same metrics, the required
-consecutive count, and an integer `criterion_<name>_met` flag for each enabled
-criterion.
+`RunHistory` stores `remaining_fraction`, `remaining_dlogz`, `live_ess`,
+`live_mean_rse`, `live_logz_error`, `logz_stability`, `logzerr`, and
+`stopping_streak` for every completed iteration. Progress callbacks receive
+the same metrics, the required consecutive count, and an integer
+`criterion_<name>_met` flag for each enabled criterion.
 
 For a run with no completed replacement, diagnostic summaries use `NaN` for
 final floating-point stopping metrics and zero for the final stopping streak.

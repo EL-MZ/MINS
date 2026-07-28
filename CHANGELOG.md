@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- `dlogz` now measures an estimated remaining increment in log evidence. Users
+  requiring the previous live-evidence-fraction behavior should use the
+  explicit `remaining_fraction` stopping criterion.
 - Split the frozen importance Morph from the active constrained-sampling Morph.
 - Added fixed and periodically refitted live-set Morph proposal schemes.
 - Renamed stored density and pseudo-likelihood arrays to explicit `log_q0` and

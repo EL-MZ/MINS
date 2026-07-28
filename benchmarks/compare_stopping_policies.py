@@ -73,8 +73,8 @@ class PolicyCase:
 
 
 POLICIES = (
-    PolicyCase(name="legacy_1e-3", dlogz=1.0e-3),
-    PolicyCase(name="remaining_1e-2", dlogz=1.0e-2),
+    PolicyCase(name="remaining_dlogz_1e-3", dlogz=1.0e-3),
+    PolicyCase(name="remaining_dlogz_1e-2", dlogz=1.0e-2),
     PolicyCase(
         name="hybrid",
         stopping=StoppingPolicy(
@@ -129,6 +129,7 @@ def run_case(
         "logz": result.logz,
         "logz_error_from_truth": result.logz - truth,
         "final_remaining_fraction": diagnostics.final_remaining_fraction,
+        "final_remaining_dlogz": diagnostics.final_remaining_dlogz,
         "final_live_ess": diagnostics.final_live_ess,
         "final_live_logz_error": diagnostics.final_live_logz_error,
         "final_logz_stability": diagnostics.final_logz_stability,
@@ -136,8 +137,8 @@ def run_case(
 
 
 def summarize_rows(rows: list[dict[str, Any]]) -> None:
-    legacy = [row for row in rows if row["policy"] == "legacy_1e-3"]
-    legacy_runtime = float(np.median([row["wall_seconds"] for row in legacy]))
+    baseline = [row for row in rows if row["policy"] == "remaining_dlogz_1e-3"]
+    baseline_runtime = float(np.median([row["wall_seconds"] for row in baseline]))
     print("\nSummary")
     for case in POLICIES:
         selected = [row for row in rows if row["policy"] == case.name]
@@ -160,7 +161,7 @@ def summarize_rows(rows: list[dict[str, Any]]) -> None:
                 "failure_rate": float(
                     np.mean([not row["success"] for row in selected])
                 ),
-                "runtime_speedup_vs_legacy": legacy_runtime
+                "runtime_speedup_vs_dlogz_1e-3": baseline_runtime
                 / float(np.median(runtimes)),
             },
         )

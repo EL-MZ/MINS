@@ -8,7 +8,8 @@ The small shell regression uses:
 - analytic evidence calculated by one-dimensional radial quadrature;
 - 400 fixed-seed approximate posterior training samples;
 - one MorphZ group containing both `x` and `y`;
-- seed `72`, `n_live=25`, `dlogz=0.1`, batch size `16`;
+- seed `72`, `n_live=25`, remaining-log-evidence tolerance `dlogz=0.1`, batch
+  size `16`;
 - at most 400 iterations and 10,000 proposals per replacement.
 
 The test asserts finite Morph densities, monotone thresholds, scientific
@@ -26,4 +27,3 @@ MPLCONFIGDIR=/tmp/mins-mpl PYTHONPATH=src python -m pytest \
 No owner-supplied shell group JSON or stored reference output was present.
 Accordingly, this fixture has no hard-coded external path and does not claim to
 reproduce an unavailable prototype configuration.
-

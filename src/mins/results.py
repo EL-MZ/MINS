@@ -70,6 +70,7 @@ class RunHistory:
     information: NDArray[np.float64]
     logzerr: NDArray[np.float64]
     remaining_fraction: NDArray[np.float64]
+    remaining_dlogz: NDArray[np.float64]
     live_ess: NDArray[np.float64]
     live_mean_rse: NDArray[np.float64]
     live_logz_error: NDArray[np.float64]

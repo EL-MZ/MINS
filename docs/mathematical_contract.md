@@ -108,15 +108,25 @@ At every completed replacement the mean-live estimate is
 \operatorname{logsumexp}(\log\Psi_0^{\rm live})-\log N
 \]
 
-and the legacy remaining-fraction diagnostic is
+The remaining-fraction diagnostic is
 
 \[
 f_{\rm live} = Z_{\rm live}/Z_{\rm total}.
 \]
 
-The default and legacy `dlogz` API succeeds when
-`f_live <= dlogz`. This measures the magnitude of evidence currently assigned
-to live points; it is not a direct estimate of evidence error.
+The default `dlogz` API instead succeeds when
+
+\[
+\Delta\log Z_{\rm rem}
+=\log Z_{\rm total}-\log Z_{\rm dead}
+=\log\left(1+\frac{Z_{\rm live}}{Z_{\rm dead}}\right)
+\leq \mathtt{dlogz}.
+\]
+
+This is the estimated change in accumulated log evidence from adding the
+mean-live remainder. The exact relationship is
+\(\Delta\log Z_{\rm rem}=-\log(1-f_{\rm live})\); the two diagnostics are
+separately named and selectable.
 
 An explicit stopping policy may combine that diagnostic with the Kish live ESS
 

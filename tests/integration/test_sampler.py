@@ -44,9 +44,17 @@ def test_constant_integrand_end_to_end_with_randomized_plateau() -> None:
     )
     assert result.success
     assert result.termination_reason == "remaining_evidence"
+    assert result.config.stopping is not None
+    assert result.config.stopping.criteria[0].name == "remaining_dlogz"
+    assert result.history.remaining_dlogz[-1] <= 0.2
+    expected_remaining_dlogz = np.logaddexp(
+        0.0,
+        result.history.logz_live[-1] - result.history.logz_dead[-1],
+    )
+    assert result.history.remaining_dlogz[-1] == pytest.approx(expected_remaining_dlogz)
     assert result.logz == pytest.approx(np.log(2.5), abs=1e-12)
     assert result.information == pytest.approx(0.0, abs=1e-12)
-    assert result.niter == 33
+    assert result.niter == 35
     assert np.sum(result.posterior_weights) == pytest.approx(1.0)
     assert not result.dead_points.flags.writeable
     assert summarize(result).thresholds_monotone
@@ -95,6 +103,7 @@ def test_hybrid_stopping_policy_succeeds_and_records_complete_state() -> None:
     assert all(snapshots[-1][key] == 1 for key in expected_flags)
     assert "criterion_live_ess_met" not in snapshots[-1]
     for name in (
+        "remaining_dlogz",
         "live_ess",
         "live_mean_rse",
         "live_logz_error",
@@ -105,6 +114,9 @@ def test_hybrid_stopping_policy_succeeds_and_records_complete_state() -> None:
         assert values.shape == (result.niter,)
         assert not values.flags.writeable
     diagnostics = summarize(result)
+    assert diagnostics.final_remaining_dlogz == pytest.approx(
+        result.history.remaining_dlogz[-1]
+    )
     assert diagnostics.final_live_logz_error == pytest.approx(
         result.history.live_logz_error[-1]
     )
@@ -155,15 +167,21 @@ def test_hard_limit_remains_failure_after_only_one_all_criterion_passes() -> Non
         stopping=StoppingPolicy(
             criteria=(
                 StoppingCriterionConfig("live_logz_error", 1.0e-12),
-                StoppingCriterionConfig("remaining_fraction", 1.0e-8),
+                StoppingCriterionConfig("logz_stability", 1.0e-12),
+                StoppingCriterionConfig("remaining_dlogz", 1.0e-8),
             ),
             mode="all",
+            stability_window=2,
         ),
         max_iterations=3,
     )
     assert not result.success
     assert result.termination_reason == "max_iterations"
     assert result.history.live_logz_error[-1] == 0.0
+    assert result.history.logz_stability[-1] == pytest.approx(0.0, abs=1.0e-12)
+    expected = -np.log1p(-np.exp(-result.niter / result.nlive))
+    assert result.history.remaining_dlogz[-1] == pytest.approx(expected)
+    assert result.history.remaining_dlogz[-1] > 1.0e-8
     assert result.history.stopping_streak[-1] == 0
 
 
@@ -223,7 +241,10 @@ def test_strict_plateau_returns_partial_failed_result() -> None:
     assert result.logz == pytest.approx(np.log(2.5), abs=1e-12)
     diagnostics = summarize(result)
     assert np.isnan(diagnostics.final_remaining_fraction)
+    assert np.isnan(diagnostics.final_remaining_dlogz)
     assert np.isnan(diagnostics.final_live_ess)
+    assert result.history.remaining_dlogz.shape == (0,)
+    assert not result.history.remaining_dlogz.flags.writeable
     assert diagnostics.final_stopping_streak == 0
 
 
@@ -314,13 +335,14 @@ def test_progress_callback_receives_standard_nested_sampling_information() -> No
         "logzerr",
         "information",
         "remaining_fraction",
+        "remaining_dlogz",
         "live_ess",
         "live_mean_rse",
         "live_logz_error",
         "logz_stability",
         "stopping_streak",
         "stopping_consecutive",
-        "criterion_remaining_fraction_met",
+        "criterion_remaining_dlogz_met",
         "stopping_tolerance",
         "threshold",
         "elapsed_seconds",
@@ -333,7 +355,7 @@ def test_progress_callback_receives_standard_nested_sampling_information() -> No
     assert snapshots[-1]["logz"] == pytest.approx(result.logz)
     assert snapshots[-1]["logzerr"] == pytest.approx(result.logzerr, abs=1e-8)
     assert snapshots[-1]["information"] == pytest.approx(result.information, abs=1e-12)
-    assert snapshots[-1]["remaining_fraction"] < result.config.dlogz
+    assert snapshots[-1]["remaining_dlogz"] <= result.config.dlogz
     assert result.history.logzerr[-1] == pytest.approx(result.logzerr, abs=1e-8)
     assert result.history.information[-1] == pytest.approx(
         result.information, abs=1e-12
@@ -360,6 +382,7 @@ def test_progress_true_renders_standard_terminal_fields(capsys: Any) -> None:
     assert "ncall" in captured.err
     assert "eff" in captured.err
     assert "rem" in captured.err
+    assert "dlogZrem" in captured.err
 
 
 def test_invalid_progress_option_is_rejected() -> None:

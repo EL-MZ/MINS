@@ -21,10 +21,10 @@ ProposalScheme = Literal["fixed_morph", "adaptive_morph"]
 
 def _validate_dlogz(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, Real):
-        raise ConfigurationError("dlogz must satisfy 0 < dlogz < 1")
+        raise ConfigurationError("dlogz must be a positive finite number")
     number = float(value)
-    if not np.isfinite(number) or not 0.0 < number < 1.0:
-        raise ConfigurationError("dlogz must satisfy 0 < dlogz < 1")
+    if not np.isfinite(number) or number <= 0.0:
+        raise ConfigurationError("dlogz must be a positive finite number")
     return number
 
 
@@ -37,7 +37,8 @@ class MINSConfig:
     n_live
         Number of live points. Must be at least two.
     dlogz
-        Optional legacy remaining-evidence-fraction tolerance in ``(0, 1)``.
+        Optional maximum estimated log-evidence increment from the current
+        mean-live remaining-evidence estimate. Must be positive and finite.
     stopping
         Resolved immutable stopping policy. Supplying this together with
         ``dlogz`` is invalid.
@@ -91,7 +92,7 @@ class MINSConfig:
             stopping = StoppingPolicy(
                 criteria=(
                     StoppingCriterionConfig(
-                        name="remaining_fraction",
+                        name="remaining_dlogz",
                         tolerance=dlogz,
                     ),
                 )

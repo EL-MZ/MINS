@@ -61,9 +61,10 @@ result = sampler.run(
 )
 ```
 
-The progress bar's `rem` field is the estimated live-evidence fraction. The
-scientific stop occurs when `rem < dlogz`; hard resource-limit stops are shown
-separately.
+The progress bar's `dlogZrem` field is the estimated change in accumulated
+log evidence from adding the mean-live remainder. The scientific stop occurs
+when `dlogZrem <= dlogz`; `rem` separately reports the live-evidence fraction,
+and hard resource-limit stops are shown separately.
 
 Inspect termination before interpreting evidence:
 
@@ -84,6 +85,7 @@ result.history.logz_total
 result.history.logzerr
 result.history.information
 result.history.remaining_fraction
+result.history.remaining_dlogz
 result.history.acceptance_fraction
 result.history.likelihood_calls
 result.history.proposal_revision

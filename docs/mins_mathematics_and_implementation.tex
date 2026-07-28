@@ -365,9 +365,9 @@ This section follows \code{MINSampler.run} in execution order.
 
 \code{MINSConfig} is immutable and validates all settings before sampling.
 If neither \code{dlogz} nor \code{stopping} is supplied, the configuration is
-resolved to \code{dlogz=1e-3}.  A legacy \code{dlogz} value is internally
+resolved to \code{dlogz=1e-3}.  A \code{dlogz} value is internally
 represented as a one-criterion \code{StoppingPolicy} using
-\code{remaining_fraction}.  Supplying both interfaces is an error.
+\code{remaining_dlogz}.  Supplying both interfaces is an error.
 
 The run then creates the progress reporter, records the initial random-number
 generator state and start time, derives a wall-time deadline if requested, and
@@ -843,10 +843,10 @@ piecewise-constant targets.\\
 \endhead
 \code{dlogz} &
 \code{None}; if both stopping inputs are omitted, resolves to \(10^{-3}\).
-Explicit value must satisfy \(0<\code{dlogz}<1\). &
-Use for the legacy single \code{remaining_fraction} scientific rule.  Smaller
-values demand a smaller live contribution and generally run longer.  This is
-not a direct absolute error tolerance.\\
+An explicit value must be positive and finite. &
+Use for the single \code{remaining_dlogz} scientific rule.  It bounds the
+estimated change in accumulated log evidence from adding the mean-live
+remainder.  Smaller values generally run longer.\\
 \code{stopping} &
 \code{None} or a \code{StoppingPolicy}; mutually exclusive with \code{dlogz}. &
 Use to combine live uncertainty, remaining mass, stability, ESS, or
@@ -918,7 +918,7 @@ proposal budget because equal values do not satisfy \(>\).\\
 Custom normalized proposal &
 Implement \code{ndim}, \code{sample(n,rng)}, and \code{log_prob(theta)};
 construct \code{MINSampler} directly and omit Morph fitting arguments.\\
-More stringent legacy completion &
+More stringent default completion &
 Decrease \code{dlogz}; also raise hard budgets so they do not stop the run
 first.  Validate by repeated runs rather than interpreting \code{dlogz} as an
 absolute evidence error.\\
@@ -938,6 +938,36 @@ record \code{result.config}, and compare complete independent runs.\\
 \section{Current scientific stopping rules}
 \label{sec:stopping-metrics}
 
+\subsection{Remaining log-evidence increment}
+
+The estimated increment from adding the mean-live remainder to the accumulated
+dead evidence is
+\begin{equation}
+  \Delta\log Z_{\mathrm{rem}}
+  = \log\left(\widehat Z_{\mathrm{dead}}+\widehat Z_{\mathrm{live}}\right)
+    -\log\widehat Z_{\mathrm{dead}}
+  = \log\left(
+      1+\frac{\widehat Z_{\mathrm{live}}}{\widehat Z_{\mathrm{dead}}}
+    \right).
+  \label{eq:remaining-dlogz}
+\end{equation}
+The criterion
+\[
+  \code{remaining_dlogz}\leq\tau
+\]
+passes at equality and requires a positive finite tolerance; \(\tau\) need not
+be less than one.  Before finite positive dead evidence has accumulated, the
+diagnostic is \(+\infty\) and cannot pass.
+
+The call
+\begin{lstlisting}
+result = sampler.run(dlogz=1.0e-3)
+\end{lstlisting}
+is exactly a one-criterion \code{remaining_dlogz} policy with
+\(\tau=\code{dlogz}\), \code{mode="all"}, one required consecutive pass, and
+no minimum iteration gate.  Omitting both \code{dlogz} and \code{stopping}
+selects this same \(10^{-3}\) behavior.
+
 \subsection{Remaining live-evidence fraction}
 
 The live fraction is
@@ -955,19 +985,15 @@ The criterion
 \[
   \code{remaining_fraction}\leq\tau
 \]
-passes at equality.  Its tolerance must satisfy \(0<\tau<1\).  The legacy API
-\begin{lstlisting}
-result = sampler.run(dlogz=1.0e-3)
-\end{lstlisting}
-is exactly a one-criterion policy with
-\(\tau=\code{dlogz}\), \code{mode="all"}, one required consecutive pass, and
-no minimum iteration gate.  Omitting both \code{dlogz} and \code{stopping}
-selects this same \(10^{-3}\) behavior.
+passes at equality.  Its tolerance must satisfy \(0<\tau<1\).  This remains an
+independently selectable explicit criterion.
 
-\important{\(f_{\mathrm{live}}\) measures the fraction of the current evidence
-estimate assigned to the live set.  It is not itself an estimate of
-\(|\widehat{\log Z}-\log Z|\), and \code{dlogz} is therefore a historical API
-name rather than the exact formula being compared.}
+The exact relationship between the two diagnostics is
+\begin{equation}
+  \Delta\log Z_{\mathrm{rem}}
+  = -\log(1-f_{\mathrm{live}}).
+\end{equation}
+They are similar only for a small remainder and must not be conflated.
 
 \subsection{Live effective sample size}
 
@@ -1028,8 +1054,8 @@ requires \(\tau>0\).  It estimates only uncertainty transmitted from
 representing the remaining integral by the finite live-set mean.  It excludes
 proposal fitting, support, mode coverage, shrinkage, and constrained-draw
 validity.  Equal live contributions produce zero empirical live-mean
-uncertainty, which is why using this rule with a remaining-fraction guard is
-safer than using it alone.
+uncertainty, so this rule is unsafe on its own.  The recommended policy pairs
+it with a \code{remaining_dlogz} completion guard.
 
 \subsection{Recent evidence stability}
 
@@ -1066,6 +1092,7 @@ not a complete calibration guarantee.
 \textbf{Name} & \textbf{Passing comparison} & \textbf{Tolerance validation}\\
 \midrule
 \code{remaining_fraction} & \(f_{\mathrm{live}}\leq\tau\) & \(0<\tau<1\)\\
+\code{remaining_dlogz} & \(\Delta\log Z_{\mathrm{rem}}\leq\tau\) & \(\tau>0\)\\
 \code{live_logz_error} & \(\sigma_{\log Z,\mathrm{live}}\leq\tau\) & \(\tau>0\)\\
 \code{logz_stability} & \(S_i\leq\tau\) & \(\tau>0\)\\
 \code{live_ess} & \(N_{\mathrm{eff,live}}\geq\tau\) & \(1\leq\tau\leq N\)\\
@@ -1115,16 +1142,17 @@ set.
 A current experimental hybrid example is:
 
 \begin{lstlisting}
+n_live = sampler.n_live
 stopping = StoppingPolicy(
     criteria=(
-        StoppingCriterionConfig("live_logz_error", 5.0e-3),
-        StoppingCriterionConfig("remaining_fraction", 5.0e-2),
+        StoppingCriterionConfig("remaining_dlogz", 1.0e-2),
+        StoppingCriterionConfig("live_logz_error", 2.0e-3),
         StoppingCriterionConfig("logz_stability", 5.0e-3),
     ),
     mode="all",
     consecutive=3,
-    min_iterations=10,
-    stability_window=10,
+    min_iterations=n_live,
+    stability_window=n_live,
 )
 
 result = sampler.run(
@@ -1133,10 +1161,10 @@ result = sampler.run(
 )
 \end{lstlisting}
 
-These threshold values are initial calibration choices in the repository, not
-universal constants.  They should be assessed using repeated seeds, known
-benchmarks where possible, proposal diagnostics, and a live count appropriate
-to the new target.
+These threshold values are illustrative calibration choices, not universal
+constants.  They require repeated-run calibration using independent seeds,
+known benchmarks where possible, proposal diagnostics, and a live count
+appropriate to the new target.
 
 \section{Exact termination semantics}
 \label{sec:termination}
@@ -1157,8 +1185,9 @@ There are exactly two termination reasons for which the result sets
 \midrule
 \endhead
 \code{remaining_evidence} &
-The run used the legacy/default \code{dlogz} interface, and after a completed
-replacement its remaining-fraction policy reached the required streak.\\
+The run used the default/legacy-compatible \code{dlogz} interface, and after a
+completed replacement its remaining-log-evidence-increment policy reached the
+required streak.\\
 \code{stopping_criteria} &
 The run used an explicit \code{StoppingPolicy}, and after a completed
 replacement its combined, gated, consecutive rule passed.\\
@@ -1310,8 +1339,8 @@ Every history field has length \code{niter}.  The history includes:
   \item discarded threshold, \(\log X_i\), and \(\log\Delta X_i\);
   \item dead, live, and total \(\log Z\);
   \item information and theoretical \code{logzerr};
-  \item remaining fraction, live ESS, live-mean RSE, live log-evidence error,
-        stability, and stopping streak;
+  \item remaining fraction, remaining log-evidence increment, live ESS,
+        live-mean RSE, live log-evidence error, stability, and stopping streak;
   \item minimum, median, and maximum live \(\log\Psi\);
   \item proposal rows used for each completed replacement, cumulative
         likelihood calls, acceptance fraction, and elapsed seconds.
@@ -1453,7 +1482,8 @@ Silent, callback, and optional \code{tqdm} progress reporters.\\
   \item \textbf{Is the posterior correlated?}  Select a suitable Morph grouping
         workflow rather than relying automatically on independent marginals.
   \item \textbf{Which scientific stop is intended?}  Use only \code{dlogz} for
-        legacy remaining fraction, or only \code{stopping} for a policy.
+        the remaining log-evidence increment, or only \code{stopping} for an
+        explicit policy.
   \item \textbf{Did the run stop successfully?}  Require
         \code{result.success} before treating it as scientifically converged,
         and inspect the exact reason and final diagnostics.

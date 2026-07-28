@@ -14,6 +14,7 @@ from .exceptions import ConfigurationError, NumericalInvariantError
 
 StoppingCriterionName = Literal[
     "remaining_fraction",
+    "remaining_dlogz",
     "live_logz_error",
     "logz_stability",
     "live_ess",
@@ -24,6 +25,7 @@ StoppingMode = Literal["all", "any"]
 SUPPORTED_STOPPING_CRITERIA = frozenset(
     {
         "remaining_fraction",
+        "remaining_dlogz",
         "live_logz_error",
         "logz_stability",
         "live_ess",
@@ -33,6 +35,7 @@ SUPPORTED_STOPPING_CRITERIA = frozenset(
 LESS_THAN_OR_EQUAL = frozenset(
     {
         "remaining_fraction",
+        "remaining_dlogz",
         "live_logz_error",
         "logz_stability",
         "logzerr",
@@ -138,6 +141,7 @@ class StoppingMetrics:
     """Stopping diagnostic values for one completed replacement."""
 
     remaining_fraction: float
+    remaining_dlogz: float
     live_ess: float
     live_mean_rse: float
     live_logz_error: float
@@ -178,9 +182,37 @@ def validate_stopping_policy_for_n_live(
             )
 
 
+def calculate_remaining_dlogz(
+    *,
+    logz_dead: float,
+    logz_live: float,
+) -> float:
+    """Return the estimated log-evidence increment from the live remainder.
+
+    Computes ``log(Z_dead + Z_live) - log(Z_dead)``, equivalently
+    ``log(1 + Z_live / Z_dead)``, in natural-log units.
+    """
+    if np.isnan(logz_dead) or np.isnan(logz_live):
+        raise NumericalInvariantError(
+            "dead and live log-evidence values must not be NaN"
+        )
+    if np.isposinf(logz_dead) or np.isposinf(logz_live):
+        raise NumericalInvariantError(
+            "dead and live log-evidence values must not be positive infinity"
+        )
+    if np.isneginf(logz_dead):
+        return float("inf")
+    if np.isneginf(logz_live):
+        return 0.0
+
+    log_live_to_dead = logz_live - logz_dead
+    return float(np.logaddexp(0.0, log_live_to_dead))
+
+
 def calculate_stopping_metrics(
     *,
     live_log_psi: ArrayLike,
+    logz_dead: float,
     logz_live: float,
     logz_total: float,
     logz_history: ArrayLike,
@@ -208,6 +240,10 @@ def calculate_stopping_metrics(
     ):
         raise ValueError("stability_window must be an integer >= 2")
     checked_logzerr = _validated_logzerr(logzerr)
+    remaining_dlogz = calculate_remaining_dlogz(
+        logz_dead=logz_dead,
+        logz_live=logz_live,
+    )
 
     n_live = len(values)
     all_zero = bool(np.all(np.isneginf(values)))
@@ -269,6 +305,7 @@ def calculate_stopping_metrics(
 
     return StoppingMetrics(
         remaining_fraction=remaining_fraction,
+        remaining_dlogz=remaining_dlogz,
         live_ess=live_ess,
         live_mean_rse=live_mean_rse,
         live_logz_error=live_logz_error,
@@ -299,7 +336,9 @@ def evaluate_stopping_policy(
     for criterion in policy.criteria:
         value = float(getattr(metrics, criterion.name))
         if not np.isfinite(value):
-            if criterion.name == "logz_stability" and np.isnan(value):
+            if (criterion.name == "remaining_dlogz" and np.isposinf(value)) or (
+                criterion.name == "logz_stability" and np.isnan(value)
+            ):
                 met = False
             else:
                 raise NumericalInvariantError(

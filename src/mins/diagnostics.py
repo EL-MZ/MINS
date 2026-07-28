@@ -20,6 +20,7 @@ class RunDiagnostics:
     thresholds_monotone: bool
     conservative_log_remaining: float
     final_remaining_fraction: float
+    final_remaining_dlogz: float
     final_live_ess: float
     final_live_mean_rse: float
     final_live_logz_error: float
@@ -43,6 +44,7 @@ def summarize(result: MINSResult) -> RunDiagnostics:
     conservative = log_x + float(np.max(result.final_live_log_psi0))
     if result.niter:
         final_remaining_fraction = float(result.history.remaining_fraction[-1])
+        final_remaining_dlogz = float(result.history.remaining_dlogz[-1])
         final_live_ess = float(result.history.live_ess[-1])
         final_live_mean_rse = float(result.history.live_mean_rse[-1])
         final_live_logz_error = float(result.history.live_logz_error[-1])
@@ -50,6 +52,7 @@ def summarize(result: MINSResult) -> RunDiagnostics:
         final_stopping_streak = int(result.history.stopping_streak[-1])
     else:
         final_remaining_fraction = float("nan")
+        final_remaining_dlogz = float("nan")
         final_live_ess = float("nan")
         final_live_mean_rse = float("nan")
         final_live_logz_error = float("nan")
@@ -63,6 +66,7 @@ def summarize(result: MINSResult) -> RunDiagnostics:
         thresholds_monotone=bool(np.all(np.diff(result.dead_log_psi0) >= 0.0)),
         conservative_log_remaining=conservative,
         final_remaining_fraction=final_remaining_fraction,
+        final_remaining_dlogz=final_remaining_dlogz,
         final_live_ess=final_live_ess,
         final_live_mean_rse=final_live_mean_rse,
         final_live_logz_error=final_live_logz_error,

@@ -68,6 +68,7 @@ class _TqdmProgress:
             "logZerr": f"{info['logzerr']:.3f}",
             "liveErr": f"{info['live_logz_error']:.2e}",
             "rem": f"{info['remaining_fraction']:.2e}",
+            "dlogZrem": f"{info['remaining_dlogz']:.2e}",
             "ESSlive": f"{info['live_ess']:.1f}",
             "stop": (
                 f"{int(info['stopping_streak'])}/{int(info['stopping_consecutive'])}"

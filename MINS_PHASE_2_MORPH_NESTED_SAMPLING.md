@@ -537,14 +537,22 @@ sampler. Let:
 \right].
 \]
 
-Stop when the estimated remaining evidence is small relative to the current
-total:
+Stop when adding the estimated live remainder would change the accumulated
+dead-point log evidence by at most `dlogz`:
 
 ```python
-log_z_live - log_z_total < np.log(dlogz)
+remaining_dlogz = (
+    np.inf
+    if np.isneginf(log_z_dead)
+    else np.logaddexp(0.0, log_z_live - log_z_dead)
+)
+remaining_dlogz <= dlogz
 ```
 
-where `dlogz` is a positive relative remaining-evidence tolerance.
+Here `dlogz` is a positive finite natural-log tolerance. Before finite positive
+dead evidence has accumulated, `remaining_dlogz` is positive infinity and the
+criterion cannot pass. The independently selectable remaining-evidence
+fraction is `exp(log_z_live - log_z_total)`.
 
 Also support hard limits:
 
@@ -790,7 +798,7 @@ Validate before the expensive run:
 - all training values are finite;
 - `n_live >= 2`;
 - batch sizes and limits are positive integers;
-- `0 < dlogz < 1`;
+- `dlogz` is positive and finite;
 - model and proposal dimensions agree;
 - model evaluation returns one value per point;
 - no NaN is returned by `log_likelihood`, `log_prior`, or `log_q`.

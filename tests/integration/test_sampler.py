@@ -381,8 +381,46 @@ def test_progress_true_renders_standard_terminal_fields(capsys: Any) -> None:
     assert "logZerr" in captured.err
     assert "ncall" in captured.err
     assert "eff" in captured.err
-    assert "rem" in captured.err
     assert "dlogZrem" in captured.err
+    assert " liveErr=" not in captured.err
+    assert " ESSlive=" not in captured.err
+    assert " rem=" not in captured.err
+    assert "prop=0" not in captured.err
+    assert "%|" not in captured.err
+    assert "/50" not in captured.err
+
+
+def test_terminal_progress_shows_only_enabled_criterion_metrics(
+    capsys: Any,
+) -> None:
+    model, proposal = _constant_problem()
+    result = MINSampler(
+        model=model,
+        importance_morph=proposal,
+        n_live=8,
+        rng=321,
+        tie_policy="randomized_plateau",
+    ).run(
+        stopping=StoppingPolicy(
+            criteria=(
+                StoppingCriterionConfig("remaining_fraction", 0.99),
+                StoppingCriterionConfig("live_logz_error", 0.1),
+                StoppingCriterionConfig("live_ess", 1.0),
+                StoppingCriterionConfig("logz_stability", 0.1),
+            ),
+            stability_window=2,
+        ),
+        max_iterations=50,
+        progress=True,
+    )
+    captured = capsys.readouterr()
+
+    assert result.success
+    assert "liveErr=" in captured.err
+    assert "ESSlive=" in captured.err
+    assert "stable=" in captured.err
+    assert "dlogZrem=" not in captured.err
+    assert " rem=" not in captured.err
 
 
 def test_invalid_progress_option_is_rejected() -> None:

@@ -142,16 +142,20 @@ Use `"randomized_plateau"` for targets with exact nonzero-probability ties. It
 stores an independent uniform auxiliary value for every dead and live point.
 
 Progress is silent by default. `progress=True` enables an optional
-`tqdm.auto` bar suitable for terminals and notebooks. Install it through
-`.[progress]`. The bar displays:
+`tqdm.auto` live display suitable for terminals and notebooks. Install it
+through `.[progress]`. It displays:
 
 - iteration and `n_live`;
 - likelihood calls and constrained-proposal efficiency;
 - current total `logZ` and theoretical `logZerr`;
-- live-set log-evidence error, remaining log-evidence increment, and
-  remaining-evidence fraction;
-- live-point ESS;
 - the current stopping streak and required consecutive count.
+
+The hard iteration limit is not rendered as a convergence percentage.
+Criterion-specific values such as `dlogZrem`, `liveErr`, `ESSlive`, and
+stability appear only when their criterion is enabled. Proposal revision and
+failure fields appear only after adaptive proposal updates occur.
+`remaining_fraction` remains in callback mappings and `RunHistory`, but is not
+shown in the terminal display.
 
 A custom callable can be passed instead of `True`. It receives a mapping after
 every completed iteration with the displayed quantities plus

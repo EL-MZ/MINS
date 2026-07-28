@@ -1352,11 +1352,14 @@ the final streak.
 
 \subsection{Progress semantics}
 
-\code{progress=True} displays iteration, live count, likelihood calls,
-efficiency, current evidence, theoretical error, finite-live diagnostics, live
-ESS, and stopping streak.  A callable receives a mapping after every completed
-iteration, including a \code{criterion_<name>_met} integer flag for every
-enabled criterion.
+\code{progress=True} displays an indeterminate live iteration count rather
+than a percentage of the hard iteration limit.  It always shows live count,
+likelihood calls, efficiency, current evidence, theoretical error, and stopping
+streak.  Criterion-specific diagnostics appear only when enabled, proposal
+status appears only after adaptive updates, and remaining fraction is omitted
+from the terminal display.  A callable still receives the complete mapping
+after every completed iteration, including a \code{criterion_<name>_met}
+integer flag for every enabled criterion.
 
 The acceptance fraction stored in history is
 \[

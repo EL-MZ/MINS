@@ -61,10 +61,12 @@ result = sampler.run(
 )
 ```
 
-The progress bar's `dlogZrem` field is the estimated change in accumulated
-log evidence from adding the mean-live remainder. The scientific stop occurs
-when `dlogZrem <= dlogz`; `rem` separately reports the live-evidence fraction,
-and hard resource-limit stops are shown separately.
+The terminal live display's `dlogZrem` field is the estimated change in
+accumulated log evidence from adding the mean-live remainder. The scientific
+stop occurs when `dlogZrem <= dlogz`. The display has no convergence
+percentage because `max_iterations` is only a hard limit. Criterion-specific
+fields appear only when enabled; the live-evidence fraction remains available
+in history and callbacks. Hard resource-limit stops are shown separately.
 
 Inspect termination before interpreting evidence:
 

@@ -179,8 +179,8 @@ class MINSampler:
         max_wall_time
             Optional wall-time limit in seconds.
         progress
-            ``False`` for silence, ``True`` for the standard tqdm bar, or a
-            callable receiving a progress mapping after every iteration.
+            ``False`` for silence, ``True`` for the standard tqdm live display,
+            or a callable receiving a progress mapping after every iteration.
 
         Returns
         -------

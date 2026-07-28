@@ -115,10 +115,13 @@ after the `log_psi0` constraint, so this mode is a heuristic: it does not in
 general draw from the constrained importance Morph and its `logZ` may be
 biased.
 
-The progress bar reports iteration, live-point count, likelihood calls,
-proposal efficiency, `logZ`, theoretical `logZerr`, finite-live uncertainty,
-remaining log-evidence increment, remaining-evidence fraction, live ESS, and
-the stopping streak.
+The terminal live display reports iteration, live-point count, likelihood
+calls, proposal efficiency, `logZ`, theoretical `logZerr`, and the stopping
+streak without treating the hard iteration limit as a convergence percentage.
+Criterion-specific metrics appear only when enabled. Proposal revision fields
+appear only after adaptive proposal updates are used. The remaining-evidence
+fraction remains available in callbacks and history rather than the terminal
+display.
 
 `result.all_points` and `result.posterior_weights` are the primary weighted
 posterior representation. `result.resample_equal(...)` provides reproducible

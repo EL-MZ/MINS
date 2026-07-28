@@ -43,7 +43,7 @@ class _CallbackProgress:
 
 
 class _TqdmProgress:
-    def __init__(self, *, max_iterations: int, n_live: int) -> None:
+    def __init__(self, *, n_live: int) -> None:
         try:
             from tqdm.auto import tqdm
         except ImportError as error:  # pragma: no cover - environment dependent
@@ -51,7 +51,7 @@ class _TqdmProgress:
                 "progress=True requires tqdm; install MINS with the 'progress' extra"
             ) from error
         self._bar = tqdm(
-            total=max_iterations,
+            total=None,
             desc=f"MINS nlive={n_live}",
             unit="it",
             dynamic_ncols=True,
@@ -66,19 +66,22 @@ class _TqdmProgress:
             "eff": f"{info['efficiency_percent']:.1f}%",
             "logZ": f"{info['logz']:.3f}",
             "logZerr": f"{info['logzerr']:.3f}",
-            "liveErr": f"{info['live_logz_error']:.2e}",
-            "rem": f"{info['remaining_fraction']:.2e}",
-            "dlogZrem": f"{info['remaining_dlogz']:.2e}",
-            "ESSlive": f"{info['live_ess']:.1f}",
-            "stop": (
-                f"{int(info['stopping_streak'])}/{int(info['stopping_consecutive'])}"
-            ),
-            "prop": int(info["proposal_revision"]),
         }
+        if "criterion_remaining_dlogz_met" in info:
+            self._postfix["dlogZrem"] = f"{info['remaining_dlogz']:.2e}"
+        if "criterion_live_logz_error_met" in info:
+            self._postfix["liveErr"] = f"{info['live_logz_error']:.2e}"
+        if "criterion_live_ess_met" in info:
+            self._postfix["ESSlive"] = f"{info['live_ess']:.1f}"
         if int(info["proposal_update_failures"]):
             self._postfix["propfail"] = int(info["proposal_update_failures"])
+        if int(info["proposal_revision"]):
+            self._postfix["prop"] = int(info["proposal_revision"])
         if "criterion_logz_stability_met" in info:
             self._postfix["stable"] = f"{info['logz_stability']:.2e}"
+        self._postfix["stop"] = (
+            f"{int(info['stopping_streak'])}/{int(info['stopping_consecutive'])}"
+        )
         self._bar.set_postfix(self._postfix, refresh=False)
         self._bar.update(max(0, iteration - self._bar.n))
 
@@ -101,16 +104,16 @@ def create_progress_reporter(
     Parameters
     ----------
     progress
-        ``False``/``None`` for silence, ``True`` for the standard terminal bar,
-        or a callable receiving progress mappings.
+        ``False``/``None`` for silence, ``True`` for the standard terminal live
+        display, or a callable receiving progress mappings.
     max_iterations
-        Progress-bar upper bound.
+        Retained for reporter construction compatibility. Hard iteration limits
+        are not represented as a convergence percentage.
     n_live
         Static live-point count displayed in the bar description.
     """
     if progress is True:
         return _TqdmProgress(
-            max_iterations=max_iterations,
             n_live=n_live,
         )
     if progress is False or progress is None:

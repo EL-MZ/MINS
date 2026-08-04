@@ -223,8 +223,10 @@ split-half ensemble Metropolis--Hastings updates. One move is selected for each
 half-update using `EnsembleMoveWeights`; weights are relative, zero-weight moves
 are omitted, and active weights are normalized internally. They remain fixed
 rather than being adapted from acceptance rates. The default
-`EnsembleRWalkSettings()` is DE-only and consumes no extra move-selection random
-draw, preserving fixed-seed behavior.
+`EnsembleRWalkSettings()` uses 60% DE, 25% stretch, and 15% Gaussian weights.
+Any pure configuration consumes no move-selection random draw; use
+`EnsembleMoveWeights(de=1, stretch=0, gaussian=0)` for the former DE-only
+sequence.
 
 For dimension $D$, the available moves are:
 

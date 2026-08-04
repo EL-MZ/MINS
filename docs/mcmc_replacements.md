@@ -187,10 +187,23 @@ normalized internally after zero-weight moves are omitted. At least one must be
 positive. Move selection happens once per half-update and is fixed and
 state-independent; acceptance statistics do not adapt the weights.
 
-The legacy/default configuration remains DE-only:
+The default is the general 60/25/15 mixture:
 
 ```python
 settings = EnsembleRWalkSettings()
+```
+
+The former DE-only behavior remains selectable explicitly and does not consume
+a move-selection RNG draw:
+
+```python
+settings = EnsembleRWalkSettings(
+    move_weights=EnsembleMoveWeights(
+        de=1.0,
+        stretch=0.0,
+        gaussian=0.0,
+    ),
+)
 ```
 
 A DE-dominant option for a higher-dimensional problem can be expressed without

@@ -47,6 +47,7 @@ def _normal_log_density(values: NDArray[np.float64]) -> NDArray[np.float64]:
                 n_sweeps=3,
                 gamma=0.7,
                 jitter_scale=0.05,
+                move_weights=EnsembleMoveWeights(de=1, stretch=0, gaussian=0),
             ),
             24,
         ),
@@ -223,6 +224,7 @@ def _draw_truncated_correlated(
                 n_sweeps=2,
                 gamma=0.7,
                 jitter_scale=0.05,
+                move_weights=EnsembleMoveWeights(de=1, stretch=0, gaussian=0),
             ),
             16,
         ),
@@ -356,6 +358,7 @@ def test_end_to_end_gaussian_evidence_agrees_across_replacement_schemes() -> Non
                     n_sweeps=2,
                     gamma=0.7,
                     jitter_scale=0.05,
+                    move_weights=EnsembleMoveWeights(de=1, stretch=0, gaussian=0),
                 )
             },
         ),

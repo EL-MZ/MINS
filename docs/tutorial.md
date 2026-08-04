@@ -161,9 +161,10 @@ ensemble_sampler = MINSampler(
 ```
 
 The discarded live point defines the constraint, is not used as a chain start,
-and does not enter the ensemble covariance. `EnsembleRWalkSettings()` keeps the
-legacy DE-only behavior. The example above uses fixed relative weights, which
-are normalized internally; MINS does not adapt them from acceptance rates. DE
+and does not enter the ensemble covariance. `EnsembleRWalkSettings()` uses the
+60/25/15 mixture shown above. The weights are fixed and relative, are normalized
+internally, and are not adapted from acceptance rates. Pure DE is available
+with `EnsembleMoveWeights(de=1, stretch=0, gaussian=0)`. DE
 uses ordered complementary differences, stretch uses the required
 `(ndim - 1) * log(z)` Hastings correction, and Gaussian uses a local frozen
 survivor covariance with default scale `2.38 / sqrt(model.ndim)`.

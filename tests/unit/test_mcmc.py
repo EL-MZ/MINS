@@ -239,7 +239,11 @@ def test_ensemble_move_weights_normalize_active_moves_in_canonical_order() -> No
         stretch=huge,
         gaussian=huge,
     ).active_names_and_probabilities[1] == pytest.approx((1 / 3, 1 / 3, 1 / 3))
-    assert EnsembleRWalkSettings().move_weights == EnsembleMoveWeights()
+    assert EnsembleRWalkSettings().move_weights == EnsembleMoveWeights(
+        de=0.60,
+        stretch=0.25,
+        gaussian=0.15,
+    )
 
 
 @pytest.mark.parametrize(
@@ -830,7 +834,11 @@ def test_accepted_mh_proposal_updates_every_cached_field(
 def test_ensemble_walk_has_exact_counts_and_reproducible_output() -> None:
     first = _all_rejected_problem()
     second = _all_rejected_problem()
-    settings = EnsembleRWalkSettings(n_walkers=4, n_sweeps=3)
+    settings = EnsembleRWalkSettings(
+        n_walkers=4,
+        n_sweeps=3,
+        move_weights=EnsembleMoveWeights(de=1, stretch=0, gaussian=0),
+    )
     attempts = []
     for problem in (first, second):
         evaluator, theta, log_likelihood, log_prior, log_q0, log_psi0, ties = problem

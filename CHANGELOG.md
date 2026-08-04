@@ -23,8 +23,9 @@ All notable changes to this project are documented here.
 - Extended `"en-rwalk"` with fixed weighted mixtures of the existing
   differential-evolution move, a Jacobian-corrected Goodman--Weare stretch
   move, and a frozen-covariance Gaussian move. Added `EnsembleMoveWeights`,
-  general Hastings-ratio acceptance, and immutable per-move result history;
-  the default remains seeded-compatible DE-only behavior.
+  general Hastings-ratio acceptance, and immutable per-move result history.
+  The default weights are 60% DE, 25% stretch, and 15% Gaussian; explicit pure
+  configurations, including the former DE-only sequence, remain available.
 
 ## 0.1.0.dev3 - 2026-07-25
 

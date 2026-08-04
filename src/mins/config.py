@@ -63,9 +63,9 @@ def _shrinkage(value: object, *, name: str) -> float:
 class EnsembleMoveWeights:
     """Relative weights for the ``en-rwalk`` proposal mixture."""
 
-    de: float = 1.0
-    stretch: float = 0.0
-    gaussian: float = 0.0
+    de: float = 0.60
+    stretch: float = 0.25
+    gaussian: float = 0.15
 
     def __post_init__(self) -> None:
         values = []

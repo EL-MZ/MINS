@@ -163,11 +163,12 @@ All three start from eligible surviving live points, never the discarded
 threshold point. The generic constrained MH log ratio is
 `min(0, proposed.log_q0 - current.log_q0 + log_hastings_ratio)`.
 `en-rwalk` chooses one move per split-half update from fixed relative weights:
-differential evolution (the default), a Goodman--Weare stretch move with the
+differential evolution, a Goodman--Weare stretch move with the
 mandatory `(ndim - 1) * log(z)` Hastings correction, or a symmetric Gaussian
 move using frozen survivor covariance. Weights are normalized internally and
-are not adaptively tuned. `EnsembleRWalkSettings()` remains the seeded-compatible
-DE-only configuration.
+are not adaptively tuned. `EnsembleRWalkSettings()` defaults to the 60% DE,
+25% stretch, and 15% Gaussian mixture shown above. Pure DE remains available by
+setting `EnsembleMoveWeights(de=1, stretch=0, gaussian=0)` explicitly.
 
 Finite walk length preserves the constrained target but does not make the
 replacement independent or guarantee adequate mixing. Calibrate walk lengths,

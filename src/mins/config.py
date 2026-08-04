@@ -16,6 +16,7 @@ from .stopping import (
 )
 
 TiePolicy = Literal["strict", "randomized_plateau"]
+EnsembleMoveName = Literal["de", "stretch", "gaussian"]
 ProposalScheme = Literal[
     "fixed_morph",
     "adaptive_morph",
@@ -56,6 +57,54 @@ def _shrinkage(value: object, *, name: str) -> float:
     if not np.isfinite(number) or not 0.0 <= number <= 1.0:
         raise ConfigurationError(f"{name} must be finite and in [0, 1]")
     return number
+
+
+@dataclass(frozen=True, slots=True)
+class EnsembleMoveWeights:
+    """Relative weights for the ``en-rwalk`` proposal mixture."""
+
+    de: float = 1.0
+    stretch: float = 0.0
+    gaussian: float = 0.0
+
+    def __post_init__(self) -> None:
+        values = []
+        for name in ("de", "stretch", "gaussian"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise ConfigurationError(
+                    f"ensemble move weight {name} must be finite and non-negative"
+                )
+            number = float(value)
+            if not np.isfinite(number) or number < 0.0:
+                raise ConfigurationError(
+                    f"ensemble move weight {name} must be finite and non-negative"
+                )
+            object.__setattr__(self, name, number)
+            values.append(number)
+        if not any(value > 0.0 for value in values):
+            raise ConfigurationError(
+                "at least one ensemble move weight must be strictly positive"
+            )
+
+    @property
+    def active_names_and_probabilities(
+        self,
+    ) -> tuple[tuple[EnsembleMoveName, ...], tuple[float, ...]]:
+        """Return active moves and normalized probabilities in canonical order."""
+        weighted_names: tuple[tuple[EnsembleMoveName, float], ...] = (
+            ("de", self.de),
+            ("stretch", self.stretch),
+            ("gaussian", self.gaussian),
+        )
+        active = tuple((name, weight) for name, weight in weighted_names if weight > 0)
+        maximum = max(weight for _, weight in active)
+        scaled = tuple((name, weight / maximum) for name, weight in active)
+        total = sum(weight for _, weight in scaled)
+        return (
+            tuple(name for name, _ in scaled),
+            tuple(weight / total for _, weight in scaled),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +174,7 @@ class SRWalkSettings:
 
 @dataclass(frozen=True, slots=True)
 class EnsembleRWalkSettings:
-    """Settings for split differential-evolution constrained MH."""
+    """Settings for split-ensemble constrained Metropolis--Hastings moves."""
 
     n_walkers: int = 8
     n_sweeps: int = 4
@@ -133,6 +182,9 @@ class EnsembleRWalkSettings:
     jitter_scale: float = 1.0e-6
     covariance_shrinkage: float = 0.1
     covariance_jitter: float = 1.0e-10
+    move_weights: EnsembleMoveWeights = field(default_factory=EnsembleMoveWeights)
+    stretch_scale: float = 2.0
+    gaussian_scale: float | None = None
 
     def __post_init__(self) -> None:
         n_walkers = _positive_integer(
@@ -154,6 +206,28 @@ class EnsembleRWalkSettings:
                 self,
                 "gamma",
                 _positive_finite(self.gamma, name="ensemble rwalk gamma"),
+            )
+        if not isinstance(self.move_weights, EnsembleMoveWeights):
+            raise ConfigurationError(
+                "ensemble rwalk move_weights must be an EnsembleMoveWeights"
+            )
+        stretch_scale = _positive_finite(
+            self.stretch_scale,
+            name="ensemble rwalk stretch_scale",
+        )
+        if stretch_scale <= 1.0:
+            raise ConfigurationError(
+                "ensemble rwalk stretch_scale must be finite and greater than one"
+            )
+        object.__setattr__(self, "stretch_scale", stretch_scale)
+        if self.gaussian_scale is not None:
+            object.__setattr__(
+                self,
+                "gaussian_scale",
+                _positive_finite(
+                    self.gaussian_scale,
+                    name="ensemble rwalk gaussian_scale",
+                ),
             )
         object.__setattr__(
             self,
@@ -216,7 +290,7 @@ class MINSConfig:
     srwalk_settings
         Gaussian-covariance random-walk Metropolis settings.
     ensemble_rwalk_settings
-        Split differential-evolution ensemble Metropolis settings.
+        Split-ensemble Metropolis--Hastings mixture settings.
     max_iterations
         Maximum number of completed dead-point replacements.
     max_proposals_per_replacement

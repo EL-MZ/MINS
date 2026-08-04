@@ -36,12 +36,18 @@ without replacement.
 
 Every proposed parameter point is evaluated once against the model and the
 original `importance_morph`. If it passes the pseudo-likelihood constraint,
-the symmetric-proposal log acceptance ratio is
+the generic log Metropolis--Hastings acceptance ratio is
 
 ```python
-log_alpha = min(0.0, proposed.log_q0 - current.log_q0)
+log_alpha = min(
+    0.0,
+    proposed.log_q0 - current.log_q0 + log_hastings_ratio,
+)
 accept = np.log(rng.random()) < log_alpha
 ```
+
+The Hastings term is zero for symmetric proposals. It is nonzero for the
+ensemble stretch move described below.
 
 Likelihood, prior, and pseudo-likelihood values affect the constraint. They are
 not the MH density ratio. In particular, passing the constraint does not imply
@@ -61,19 +67,21 @@ Dynesty's internal eigenvalue and condition-number repair produces finite axes
 for rank-deficient live sets. The axes are cached and rebuilt after roughly
 `walks * n_live` random-walk calls.
 
-`s-rwalk` and `en-rwalk` use a regularized covariance built from frozen
-survivors:
+`s-rwalk` and the DE/Gaussian `en-rwalk` moves use a regularized covariance
+built from frozen survivors:
 
 \[
 C_{\rm reg}
 =(1-\rho)C+\rho\,\operatorname{diag}(C)+\epsilon I.
 \]
 
-Geometry remains fixed during each complete replacement. Parameters are
-proposed in their full physical space. MINS does not clip to a prior boundary
-or redraw until a point enters the prior, because either operation would
-destroy proposal symmetry. A proposal with zero prior or likelihood is
-rejected through the ordinary constraint.
+The discarded point defines the threshold but is excluded from ensemble
+initialization and covariance estimation. Geometry remains fixed during each
+complete replacement and is built lazily for `en-rwalk`; a stretch-only
+replacement never computes it. Parameters are proposed in their full physical
+space. MINS does not clip to a prior boundary or redraw until a point enters the
+prior, because either operation would change the proposal kernel. A proposal
+with zero prior or likelihood is rejected through the ordinary constraint.
 
 ## Standard random walk
 
@@ -150,40 +158,121 @@ shrinkage and jitter are configurable, and rank-deficient or
 lower-sample-than-dimension live sets are handled by deterministic eigenvalue
 flooring.
 
-## Ensemble differential-evolution walk
+## Ensemble move mixture
 
 ```python
-from mins import EnsembleRWalkSettings, MINSampler
+from mins import EnsembleMoveWeights, EnsembleRWalkSettings, MINSampler
 
 sampler = MINSampler(
     model=model,
     importance_morph=importance_morph,
     proposal_scheme="en-rwalk",
     ensemble_rwalk_settings=EnsembleRWalkSettings(
-        n_walkers=8,
+        n_walkers=16,
         n_sweeps=6,
+        move_weights=EnsembleMoveWeights(
+            de=0.60,
+            stretch=0.25,
+            gaussian=0.15,
+        ),
     ),
     n_live=200,
     rng=42,
 )
 ```
 
-`n_walkers` must be even, at least four, and no greater than
-`n_live - 1`. Each sweep randomly splits the ensemble into equal halves.
-Walkers in one half propose using two distinct, ordered references from the
-frozen complementary half:
+`n_walkers` must be even, at least four, and no greater than `n_live - 1`.
+Weights are non-negative relative weights, do not need to sum to one, and are
+normalized internally after zero-weight moves are omitted. At least one must be
+positive. Move selection happens once per half-update and is fixed and
+state-independent; acceptance statistics do not adapt the weights.
+
+The legacy/default configuration remains DE-only:
+
+```python
+settings = EnsembleRWalkSettings()
+```
+
+A DE-dominant option for a higher-dimensional problem can be expressed without
+claiming it is universally optimal:
+
+```python
+settings = EnsembleRWalkSettings(
+    n_walkers=20,
+    n_sweeps=6,
+    move_weights=EnsembleMoveWeights(
+        de=0.75,
+        stretch=0.10,
+        gaussian=0.15,
+    ),
+)
+```
+
+Pure stretch is also valid:
+
+```python
+settings = EnsembleRWalkSettings(
+    move_weights=EnsembleMoveWeights(
+        de=0.0,
+        stretch=1.0,
+        gaussian=0.0,
+    ),
+)
+```
+
+Each sweep randomly permutes and splits the ensemble into equal halves. The
+first half is updated against a frozen second half; the second is then updated
+against the now-frozen first half. The selected move proposes every active
+walker in one vectorized batch.
+
+### Differential evolution
+
+Walkers use two distinct, ordered references from the complementary half:
 
 \[
 \theta_i'=\theta_i+\gamma(\theta_j-\theta_k)
           +\sigma_\epsilon Lz.
 \]
 
-The default is \(\gamma=2.38/\sqrt{2D}\). Nonzero symmetric jitter is always
-present. MINS batch-evaluates a half, independently accepts or rejects its
-walkers, then updates the other half against the now-current but
-frozen-during-that-update complement. After every sweep, one walker is selected
-uniformly from the complete final ensemble. Unchanged and rejected walkers
-remain eligible for output.
+The default is \(\gamma=2.38/\sqrt{2D}\). Nonzero symmetric covariance-shaped
+jitter is always present, so this move has zero Hastings correction.
+
+### Stretch
+
+One complementary walker $j$ is selected for each active walker and
+
+\[
+z=\frac{((a-1)u+1)^2}{a},\quad u\sim U(0,1),\qquad
+\theta_i'=\theta_j+z(\theta_i-\theta_j),
+\]
+
+where `stretch_scale` is $a>1$, defaulting to 2. This is not symmetric. Its
+mandatory Hastings correction is
+
+\[
+\log\frac{Q(\theta_i\mid\theta_i')}{Q(\theta_i'\mid\theta_i)}
+=(D-1)\log z.
+\]
+
+Omitting the corresponding $z^{D-1}$ factor would target the wrong
+distribution.
+
+### Gaussian covariance
+
+The local Gaussian move is
+
+\[
+\theta_i'=\theta_i+sLz_i,\qquad z_i\sim\mathcal N(0,I).
+\]
+
+Its scale defaults to $s=2.38/\sqrt D$, or uses a positive explicit
+`gaussian_scale`. It is symmetric and has zero Hastings correction. The same
+regularized survivor factor $L$ used by DE jitter is computed at most once and
+frozen for all sweeps in a replacement; it is never recomputed after accepted
+ensemble moves.
+
+After the configured sweeps, one walker is selected uniformly from the complete
+final ensemble. Unchanged and rejected walkers remain eligible for output.
 
 ## Limits and diagnostics
 
@@ -211,6 +300,22 @@ worst live point untouched; it never returns a shortened chain.
   complete sweeps for `"en-rwalk"`.
 
 The two fractions are `NaN` and counts are zero for non-MCMC schemes.
+
+For `en-rwalk`, `result.ensemble_move_history` adds immutable per-move matrices:
+
+```python
+move_history = result.ensemble_move_history
+assert move_history.names == ("de", "stretch", "gaussian")
+proposed = move_history.proposed  # shape (result.niter, 3), read-only
+valid = move_history.valid
+accepted = move_history.accepted
+moved = move_history.moved
+```
+
+Each row's proposed, valid, and accepted counts sum to the aggregate iteration
+counts. A move's `moved` value counts distinct walkers it moved during that
+replacement. A walker can appear in more than one move column if it accepted
+different move types.
 
 ## Mixing limitations
 

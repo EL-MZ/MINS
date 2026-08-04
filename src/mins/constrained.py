@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import TiePolicy
+from .config import EnsembleMoveName, TiePolicy
 from .exceptions import (
     InvalidModelOutput,
     InvalidProposalOutput,
@@ -51,6 +51,41 @@ class ConstrainedDraw:
 
 
 @dataclass(frozen=True, slots=True)
+class EnsembleMoveStats:
+    """Counts for one ensemble move during one replacement.
+
+    ``n_moved`` counts distinct walkers moved by this move. A walker can be
+    counted for multiple moves if it accepts more than one move type.
+    """
+
+    name: EnsembleMoveName
+    n_proposed: int
+    n_valid: int
+    n_accepted: int
+    n_moved: int
+
+    def __post_init__(self) -> None:
+        if self.name not in ("de", "stretch", "gaussian"):
+            raise ValueError(f"unsupported ensemble move name: {self.name!r}")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (
+                self.n_proposed,
+                self.n_valid,
+                self.n_accepted,
+                self.n_moved,
+            )
+        ):
+            raise ValueError("ensemble move counts must be non-negative integers")
+        if self.n_valid > self.n_proposed:
+            raise ValueError("ensemble valid count cannot exceed proposed count")
+        if self.n_accepted > self.n_valid:
+            raise ValueError("ensemble accepted count cannot exceed valid count")
+        if self.n_moved > self.n_accepted:
+            raise ValueError("ensemble moved count cannot exceed accepted count")
+
+
+@dataclass(frozen=True, slots=True)
 class ConstrainedAttempt:
     """A successful draw or a typed resource-limit failure."""
 
@@ -61,6 +96,7 @@ class ConstrainedAttempt:
     n_accepted: int = 0
     n_moved: int = 0
     n_completed: int = 0
+    ensemble_move_stats: tuple[EnsembleMoveStats, ...] = ()
 
 
 def passes_constraint(

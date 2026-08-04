@@ -117,7 +117,12 @@ Dynesty-style walk, the statistically specified Gaussian walk, or an ensemble
 walk:
 
 ```python
-from mins import EnsembleRWalkSettings, RWalkSettings, SRWalkSettings
+from mins import (
+    EnsembleMoveWeights,
+    EnsembleRWalkSettings,
+    RWalkSettings,
+    SRWalkSettings,
+)
 
 rwalk_sampler = MINSampler(
     model=model,
@@ -142,20 +147,34 @@ ensemble_sampler = MINSampler(
     importance_morph=importance_morph,
     proposal_scheme="en-rwalk",
     ensemble_rwalk_settings=EnsembleRWalkSettings(
-        n_walkers=8,
+        n_walkers=16,
         n_sweeps=6,
+        move_weights=EnsembleMoveWeights(
+            de=0.60,
+            stretch=0.25,
+            gaussian=0.15,
+        ),
     ),
     n_live=200,
     rng=42,
 )
 ```
 
-The discarded live point defines the constraint and is not used as a chain
-start. MCMC replacements remain correlated with eligible survivors. Increasing
+The discarded live point defines the constraint, is not used as a chain start,
+and does not enter the ensemble covariance. `EnsembleRWalkSettings()` keeps the
+legacy DE-only behavior. The example above uses fixed relative weights, which
+are normalized internally; MINS does not adapt them from acceptance rates. DE
+uses ordered complementary differences, stretch uses the required
+`(ndim - 1) * log(z)` Hastings correction, and Gaussian uses a local frozen
+survivor covariance with default scale `2.38 / sqrt(model.ndim)`.
+
+MCMC replacements remain correlated with eligible survivors. Increasing
 `walks`, `n_steps`, or `n_sweeps` can improve mixing but does not create an
 independence guarantee. Examine `result.history.constraint_pass_fraction`,
-`result.history.mh_acceptance_fraction`, and
-`result.history.mcmc_moved`, and calibrate settings with repeated complete
+`result.history.mh_acceptance_fraction`, `result.history.mcmc_moved`, and, for
+the ensemble scheme, `result.ensemble_move_history`. The latter contains
+read-only `(niter, 3)` proposed, valid, accepted, and moved arrays ordered as
+`("de", "stretch", "gaussian")`. Calibrate settings with repeated complete
 runs. Do not discard unchanged outputs or select only walkers that moved;
 conditioning on movement biases the replacement. See the dedicated
 [MCMC replacement guide](mcmc_replacements.md).

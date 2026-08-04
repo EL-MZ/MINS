@@ -6,6 +6,7 @@ from tests.helpers import StandardNormalProposal
 
 from mins import (
     CallableModel,
+    EnsembleMoveWeights,
     EnsembleRWalkSettings,
     MINSampler,
     RWalkSettings,
@@ -86,6 +87,63 @@ def test_mcmc_samplers_are_reproducible_and_report_separate_diagnostics(
         first.history.mh_acceptance_fraction,
         second.history.mh_acceptance_fraction,
     )
+    if proposal_scheme == "en-rwalk":
+        move_history = first.ensemble_move_history
+        assert move_history is not None
+        assert move_history.names == ("de", "stretch", "gaussian")
+        assert move_history.proposed.shape == (first.niter, 3)
+        assert not move_history.proposed.flags.writeable
+        assert not move_history.valid.flags.writeable
+        assert not move_history.accepted.flags.writeable
+        assert not move_history.moved.flags.writeable
+        np.testing.assert_array_equal(
+            np.sum(move_history.proposed, axis=1),
+            first.history.proposals,
+        )
+        np.testing.assert_array_equal(
+            np.sum(move_history.accepted, axis=1),
+            first.history.mcmc_accepted,
+        )
+    else:
+        assert first.ensemble_move_history is None
+
+
+def test_mixed_ensemble_moves_report_exact_result_level_counts() -> None:
+    model, proposal = _constant_problem()
+    result = MINSampler(
+        model=model,
+        importance_morph=proposal,
+        proposal_scheme="en-rwalk",
+        ensemble_rwalk_settings=EnsembleRWalkSettings(
+            n_walkers=4,
+            n_sweeps=3,
+            move_weights=EnsembleMoveWeights(de=0.6, stretch=0.25, gaussian=0.15),
+        ),
+        n_live=10,
+        rng=101,
+        tie_policy="randomized_plateau",
+    ).run(
+        dlogz=0.5,
+        max_iterations=100,
+        max_proposals_per_replacement=12,
+    )
+    assert result.success
+    assert result.n_proposals == result.niter * 12
+    assert result.n_likelihood_calls == result.nlive + result.n_proposals
+    move_history = result.ensemble_move_history
+    assert move_history is not None
+    np.testing.assert_array_equal(
+        np.sum(move_history.proposed, axis=1),
+        result.history.proposals,
+    )
+    np.testing.assert_array_equal(
+        np.sum(move_history.accepted, axis=1),
+        result.history.mcmc_accepted,
+    )
+    expected_valid = np.rint(
+        result.history.constraint_pass_fraction * result.history.proposals
+    ).astype(np.int64)
+    np.testing.assert_array_equal(np.sum(move_history.valid, axis=1), expected_valid)
 
 
 def test_non_mcmc_history_keeps_nested_efficiency_semantics() -> None:
@@ -105,6 +163,7 @@ def test_non_mcmc_history_keeps_nested_efficiency_semantics() -> None:
     assert np.all(result.history.mcmc_accepted == 0)
     assert np.all(result.history.mcmc_moved == 0)
     assert np.all(result.history.mcmc_completed == 0)
+    assert result.ensemble_move_history is None
     np.testing.assert_allclose(
         result.history.acceptance_fraction,
         np.arange(1, result.niter + 1) / np.cumsum(result.history.proposals),

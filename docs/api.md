@@ -129,7 +129,12 @@ The proposal scheme is one of `"fixed_morph"`, `"adaptive_morph"`, `"rwalk"`,
 public:
 
 ```python
-from mins import EnsembleRWalkSettings, RWalkSettings, SRWalkSettings
+from mins import (
+    EnsembleMoveWeights,
+    EnsembleRWalkSettings,
+    RWalkSettings,
+    SRWalkSettings,
+)
 
 rwalk = MINSampler(
     model=model,
@@ -154,6 +159,13 @@ statistical_rwalk = MINSampler(
         facc=0.5,
         covariance_shrinkage=0.1,
         covariance_jitter=1e-10,
+        move_weights=EnsembleMoveWeights(
+            de=0.60,
+            stretch=0.25,
+            gaussian=0.15,
+        ),
+        stretch_scale=2.0,
+        gaussian_scale=None,
     ),
     n_live=200,
     rng=42,
@@ -207,15 +219,39 @@ After each complete chain, the scale is tuned toward `facc` using the same
 recursion as `rwalk`.
 
 `proposal_scheme="en-rwalk"` selects distinct eligible survivors and performs
-split-half differential-evolution Metropolis updates. The complementary half
-is fixed while a half is generated and evaluated. Its final replacement is a
-uniform selection from every final walker, including unchanged walkers.
+split-half ensemble Metropolis--Hastings updates. One move is selected for each
+half-update using `EnsembleMoveWeights`; weights are relative, zero-weight moves
+are omitted, and active weights are normalized internally. They remain fixed
+rather than being adapted from acceptance rates. The default
+`EnsembleRWalkSettings()` is DE-only and consumes no extra move-selection random
+draw, preserving fixed-seed behavior.
+
+For dimension $D$, the available moves are:
+
+- `de`: \(\theta_i'=\theta_i+\gamma(\theta_j-\theta_k)+\sigma Lz\),
+  with distinct ordered references and default
+  \(\gamma=2.38/\sqrt{2D}\);
+- `stretch`: \(\theta_i'=\theta_j+z(\theta_i-\theta_j)\), where
+  \(g(z)\propto z^{-1/2}\) on `[1 / stretch_scale, stretch_scale]`;
+- `gaussian`: \(\theta_i'=\theta_i+sLz\), with default
+  \(s=2.38/\sqrt D\).
+
+The DE and Gaussian moves are symmetric. Stretch proposals require the
+mandatory Hastings correction `(D - 1) * log(z)`. The complementary half is
+frozen while its active half is generated and evaluated. The regularized
+survivor-covariance factor is constructed lazily, excludes the discarded point,
+and is frozen for a complete replacement. A stretch-only replacement does not
+construct it. The final replacement is selected uniformly from every final
+walker, including unchanged walkers.
 
 For all three MCMC modes, a candidate must first pass the fixed-`log_psi0`
-constraint. Its log acceptance ratio is then
-`min(0, proposed.log_q0 - current.log_q0)`. The discarded point supplies the
-threshold but is outside the strict constraint and is never an MCMC starting
-state. Proposals are not clipped or redrawn at prior boundaries.
+constraint. Its generic log acceptance ratio is
+`min(0, proposed.log_q0 - current.log_q0 + log_hastings_ratio)`; the Hastings
+term is zero except for stretch moves. The target is constrained fixed `q0`, not
+the posterior, prior, likelihood, or a uniform constrained density. The
+discarded point supplies the threshold but is outside the strict constraint and
+is never an MCMC starting state. Proposals are not clipped or redrawn at prior
+boundaries.
 
 The complete contract, proposal equations, resource behavior, and mixing
 limitations are in [MCMC replacements](mcmc_replacements.md).
@@ -276,6 +312,13 @@ breakers.
 refit, including its boundary iteration, success, active revision, training
 row count, proposal metadata, and any error. `importance_morph_description`
 describes the fixed density used for all `log_q0` values.
+
+For `proposal_scheme="en-rwalk"`, `ensemble_move_history` is an immutable
+`EnsembleMoveHistory` with canonical `names == ("de", "stretch", "gaussian")`.
+Its read-only `proposed`, `valid`, `accepted`, and `moved` arrays each have shape
+`(niter, 3)`. A per-move moved count is the number of distinct walkers moved by
+that move during the replacement; one walker can appear in more than one move
+column. Other proposal schemes store `ensemble_move_history=None`.
 
 For consumers that require unweighted samples:
 

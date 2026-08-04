@@ -10,6 +10,7 @@ from tests.helpers import StandardNormalProposal
 
 from mins import (
     CallableModel,
+    EnsembleMoveWeights,
     EnsembleRWalkSettings,
     MINSampler,
     RWalkSettings,
@@ -46,6 +47,37 @@ def _normal_log_density(values: NDArray[np.float64]) -> NDArray[np.float64]:
                 n_sweeps=3,
                 gamma=0.7,
                 jitter_scale=0.05,
+            ),
+            24,
+        ),
+        (
+            draw_ensemble_rwalk_constrained,
+            EnsembleRWalkSettings(
+                n_walkers=8,
+                n_sweeps=3,
+                move_weights=EnsembleMoveWeights(de=0, stretch=1, gaussian=0),
+            ),
+            24,
+        ),
+        (
+            draw_ensemble_rwalk_constrained,
+            EnsembleRWalkSettings(
+                n_walkers=8,
+                n_sweeps=3,
+                move_weights=EnsembleMoveWeights(de=0, stretch=0, gaussian=1),
+            ),
+            24,
+        ),
+        (
+            draw_ensemble_rwalk_constrained,
+            EnsembleRWalkSettings(
+                n_walkers=8,
+                n_sweeps=3,
+                move_weights=EnsembleMoveWeights(
+                    de=0.60,
+                    stretch=0.25,
+                    gaussian=0.15,
+                ),
             ),
             24,
         ),
@@ -194,6 +226,37 @@ def _draw_truncated_correlated(
             ),
             16,
         ),
+        (
+            draw_ensemble_rwalk_constrained,
+            EnsembleRWalkSettings(
+                n_walkers=8,
+                n_sweeps=2,
+                move_weights=EnsembleMoveWeights(de=0, stretch=1, gaussian=0),
+            ),
+            16,
+        ),
+        (
+            draw_ensemble_rwalk_constrained,
+            EnsembleRWalkSettings(
+                n_walkers=8,
+                n_sweeps=2,
+                move_weights=EnsembleMoveWeights(de=0, stretch=0, gaussian=1),
+            ),
+            16,
+        ),
+        (
+            draw_ensemble_rwalk_constrained,
+            EnsembleRWalkSettings(
+                n_walkers=8,
+                n_sweeps=2,
+                move_weights=EnsembleMoveWeights(
+                    de=0.60,
+                    stretch=0.25,
+                    gaussian=0.15,
+                ),
+            ),
+            16,
+        ),
     ],
 )
 def test_correlated_gaussian_non_axis_aligned_constraint(
@@ -293,6 +356,20 @@ def test_end_to_end_gaussian_evidence_agrees_across_replacement_schemes() -> Non
                     n_sweeps=2,
                     gamma=0.7,
                     jitter_scale=0.05,
+                )
+            },
+        ),
+        (
+            "en-rwalk",
+            {
+                "ensemble_rwalk_settings": EnsembleRWalkSettings(
+                    n_walkers=8,
+                    n_sweeps=2,
+                    move_weights=EnsembleMoveWeights(
+                        de=0.60,
+                        stretch=0.25,
+                        gaussian=0.15,
+                    ),
                 )
             },
         ),

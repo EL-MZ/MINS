@@ -2,6 +2,8 @@
 
 from ._version import __version__
 from .config import (
+    EnsembleMoveName,
+    EnsembleMoveWeights,
     EnsembleRWalkSettings,
     MINSConfig,
     ProposalScheme,
@@ -20,13 +22,16 @@ from .exceptions import (
 from .model import CallableModel, Model
 from .plotting import plot_nested_progress
 from .proposals import MorphMetadata, MorphProposal, Proposal, RefittableProposal
-from .results import MINSResult, ProposalUpdateRecord, RunHistory
+from .results import EnsembleMoveHistory, MINSResult, ProposalUpdateRecord, RunHistory
 from .sampler import MINSampler
 from .stopping import StoppingCriterionConfig, StoppingPolicy
 
 __all__ = [
     "CallableModel",
     "ConfigurationError",
+    "EnsembleMoveHistory",
+    "EnsembleMoveName",
+    "EnsembleMoveWeights",
     "EnsembleRWalkSettings",
     "InvalidModelOutput",
     "InvalidProposalOutput",

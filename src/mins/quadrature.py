@@ -176,9 +176,7 @@ def finalize_quadrature(
         raise NumericalInvariantError("final evidence is not finite")
     log_posterior_weights = shifted_contributions - log_normalizer
     posterior_weights = np.exp(log_posterior_weights)
-    if not np.isclose(
-        logsumexp(log_posterior_weights), 0.0, rtol=0.0, atol=1.0e-12
-    ):
+    if not np.isclose(logsumexp(log_posterior_weights), 0.0, rtol=0.0, atol=1.0e-12):
         raise NumericalInvariantError("posterior weights do not sum to one")
     positive = posterior_weights > 0.0
     information = float(

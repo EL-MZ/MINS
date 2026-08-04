@@ -38,6 +38,7 @@ import numpy as np
 
 from mins import (
     CallableModel,
+    EnsembleMoveWeights,
     EnsembleRWalkSettings,
     MINSampler,
     MorphProposal,
@@ -145,22 +146,35 @@ ensemble_sampler = MINSampler(
     importance_morph=importance_morph,
     proposal_scheme="en-rwalk",
     ensemble_rwalk_settings=EnsembleRWalkSettings(
-        n_walkers=8,
+        n_walkers=16,
         n_sweeps=6,
+        move_weights=EnsembleMoveWeights(
+            de=0.60,
+            stretch=0.25,
+            gaussian=0.15,
+        ),
     ),
     n_live=200,
     rng=42,
 )
 ```
 
-All three start from eligible surviving live points, never the discarded threshold
-point. Symmetric proposals above the pseudo-likelihood constraint are accepted
-with
-`min(1, exp(proposed.log_q0 - current.log_q0))`. Finite walk length preserves
-the constrained target but does not make the replacement independent or
-guarantee adequate mixing. Calibrate walk lengths and live-set size with
-repeated runs; low MH acceptance and unchanged ensemble walkers are mixing
-warnings, not reasons to condition output on movement. See
+All three start from eligible surviving live points, never the discarded
+threshold point. The generic constrained MH log ratio is
+`min(0, proposed.log_q0 - current.log_q0 + log_hastings_ratio)`.
+`en-rwalk` chooses one move per split-half update from fixed relative weights:
+differential evolution (the default), a Goodman--Weare stretch move with the
+mandatory `(ndim - 1) * log(z)` Hastings correction, or a symmetric Gaussian
+move using frozen survivor covariance. Weights are normalized internally and
+are not adaptively tuned. `EnsembleRWalkSettings()` remains the seeded-compatible
+DE-only configuration.
+
+Finite walk length preserves the constrained target but does not make the
+replacement independent or guarantee adequate mixing. Calibrate walk lengths,
+move weights, and live-set size with repeated runs; low MH acceptance and
+unchanged ensemble walkers are mixing warnings, not reasons to condition output
+on movement. `result.ensemble_move_history` exposes read-only proposed, valid,
+accepted, and moved matrices in `("de", "stretch", "gaussian")` order. See
 [MCMC replacements](docs/mcmc_replacements.md).
 
 When `walks` is omitted, standard `rwalk` uses `model.ndim + 20`, matching

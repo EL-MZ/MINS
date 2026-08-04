@@ -5,7 +5,8 @@ bounding-ellipsoid construction are adapted from dynesty 3.1.0. MINS applies
 an additional fixed-``q0`` Metropolis correction because it operates directly
 in parameter space rather than through dynesty's unit-prior transform. The
 separate ``s-rwalk`` kernel uses a frozen regularized survivor covariance and
-Gaussian proposals.
+Gaussian proposals. The split ``en-rwalk`` kernel selects fixed-weight DE,
+stretch, or frozen-covariance Gaussian half-ensemble moves.
 """
 
 from __future__ import annotations
@@ -13,16 +14,25 @@ from __future__ import annotations
 import math
 import time
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy import linalg as scipy_linalg
 
-from .config import EnsembleRWalkSettings, RWalkSettings, SRWalkSettings, TiePolicy
+from .config import (
+    EnsembleMoveName,
+    EnsembleMoveWeights,
+    EnsembleRWalkSettings,
+    RWalkSettings,
+    SRWalkSettings,
+    TiePolicy,
+)
 from .constrained import (
     BatchEvaluator,
     ConstrainedAttempt,
     ConstrainedDraw,
+    EnsembleMoveStats,
     EvaluatedBatch,
     EvaluatedPoint,
     passes_constraint,
@@ -331,15 +341,50 @@ def log_q0_acceptance_ratio(
     proposed_log_q0: float,
 ) -> float:
     """Return the symmetric-proposal MH log ratio for constrained ``q0``."""
+    return log_metropolis_acceptance_ratio(
+        current_log_q0=current_log_q0,
+        proposed_log_q0=proposed_log_q0,
+        log_hastings_ratio=0.0,
+    )
+
+
+def log_metropolis_acceptance_ratio(
+    *,
+    current_log_q0: float,
+    proposed_log_q0: float,
+    log_hastings_ratio: float = 0.0,
+) -> float:
+    """Return the general fixed-``q0`` Metropolis--Hastings log ratio."""
     if not np.isfinite(current_log_q0):
         raise NumericalInvariantError(
             "an eligible MCMC starting state must have finite log_q0"
         )
-    if np.isneginf(proposed_log_q0):
-        return -np.inf
-    if not np.isfinite(proposed_log_q0):
+    if np.isnan(proposed_log_q0) or np.isposinf(proposed_log_q0):
         raise NumericalInvariantError("an MCMC proposal has invalid log_q0")
-    return min(0.0, proposed_log_q0 - current_log_q0)
+    if np.isnan(log_hastings_ratio) or np.isposinf(log_hastings_ratio):
+        raise NumericalInvariantError("an MCMC proposal has invalid Hastings ratio")
+    if np.isneginf(proposed_log_q0) or np.isneginf(log_hastings_ratio):
+        return -np.inf
+    return min(
+        0.0,
+        proposed_log_q0 - current_log_q0 + log_hastings_ratio,
+    )
+
+
+def accepts_metropolis(
+    *,
+    current_log_q0: float,
+    proposed_log_q0: float,
+    log_hastings_ratio: float,
+    rng: np.random.Generator,
+) -> bool:
+    """Draw a fixed-``q0`` Metropolis--Hastings decision in log space."""
+    log_alpha = log_metropolis_acceptance_ratio(
+        current_log_q0=current_log_q0,
+        proposed_log_q0=proposed_log_q0,
+        log_hastings_ratio=log_hastings_ratio,
+    )
+    return bool(np.log(rng.random()) < log_alpha)
 
 
 def accepts_log_q0_metropolis(
@@ -349,11 +394,12 @@ def accepts_log_q0_metropolis(
     rng: np.random.Generator,
 ) -> bool:
     """Draw the exact fixed-``q0`` Metropolis decision in log space."""
-    log_alpha = log_q0_acceptance_ratio(
+    return accepts_metropolis(
         current_log_q0=current_log_q0,
         proposed_log_q0=proposed_log_q0,
+        log_hastings_ratio=0.0,
+        rng=rng,
     )
-    return bool(np.log(rng.random()) < log_alpha)
 
 
 def eligible_survivor_indices(
@@ -708,6 +754,149 @@ def draw_srwalk_constrained(
     )
 
 
+_ENSEMBLE_MOVE_NAMES: tuple[EnsembleMoveName, ...] = (
+    "de",
+    "stretch",
+    "gaussian",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _EnsembleProposalBatch:
+    """One vectorized half-ensemble proposal and its Hastings corrections."""
+
+    theta: NDArray[np.float64]
+    log_hastings_ratio: NDArray[np.float64]
+    move_name: EnsembleMoveName
+
+
+def _select_ensemble_move(
+    *,
+    move_weights: EnsembleMoveWeights,
+    rng: np.random.Generator,
+) -> EnsembleMoveName:
+    """Select one move, avoiding an RNG draw for a pure configuration."""
+    names, probabilities = move_weights.active_names_and_probabilities
+    if len(names) == 1:
+        return names[0]
+    selected = int(rng.choice(len(names), p=probabilities))
+    return names[selected]
+
+
+def _propose_de_move(
+    *,
+    ensemble_theta: NDArray[np.float64],
+    active: NDArray[np.int64],
+    complement: NDArray[np.int64],
+    settings: EnsembleRWalkSettings,
+    factor: NDArray[np.float64],
+    rng: np.random.Generator,
+) -> _EnsembleProposalBatch:
+    """Propose the legacy ordered-pair differential-evolution move."""
+    ndim = ensemble_theta.shape[1]
+    gamma = 2.38 / np.sqrt(2.0 * ndim) if settings.gamma is None else settings.gamma
+    proposals = np.empty((len(active), ndim), dtype=float)
+    for row, walker in enumerate(active):
+        references = np.asarray(
+            rng.choice(complement, size=2, replace=False),
+            dtype=np.int64,
+        )
+        difference = ensemble_theta[references[0]] - ensemble_theta[references[1]]
+        jitter = settings.jitter_scale * (factor @ rng.normal(size=ndim))
+        proposals[row] = ensemble_theta[walker] + gamma * difference + jitter
+    return _EnsembleProposalBatch(
+        theta=proposals,
+        log_hastings_ratio=np.zeros(len(active), dtype=float),
+        move_name="de",
+    )
+
+
+def _draw_stretch_factors(
+    *,
+    n_active: int,
+    stretch_scale: float,
+    rng: np.random.Generator,
+) -> NDArray[np.float64]:
+    """Draw Goodman--Weare stretch factors with density proportional to z^-1/2."""
+    uniform = np.asarray(rng.random(n_active), dtype=float)
+    return np.asarray(
+        ((stretch_scale - 1.0) * uniform + 1.0) ** 2 / stretch_scale,
+        dtype=float,
+    )
+
+
+def _propose_stretch_move(
+    *,
+    ensemble_theta: NDArray[np.float64],
+    active: NDArray[np.int64],
+    complement: NDArray[np.int64],
+    stretch_scale: float,
+    rng: np.random.Generator,
+) -> _EnsembleProposalBatch:
+    """Propose a split-ensemble stretch move with its Jacobian correction."""
+    reference_rows = np.asarray(
+        rng.choice(complement, size=len(active), replace=True),
+        dtype=np.int64,
+    )
+    stretch = _draw_stretch_factors(
+        n_active=len(active),
+        stretch_scale=stretch_scale,
+        rng=rng,
+    )
+    reference_theta = ensemble_theta[reference_rows]
+    proposals = reference_theta + stretch[:, np.newaxis] * (
+        ensemble_theta[active] - reference_theta
+    )
+    ndim = ensemble_theta.shape[1]
+    return _EnsembleProposalBatch(
+        theta=np.asarray(proposals, dtype=float),
+        log_hastings_ratio=np.asarray((ndim - 1.0) * np.log(stretch), dtype=float),
+        move_name="stretch",
+    )
+
+
+def _propose_gaussian_move(
+    *,
+    ensemble_theta: NDArray[np.float64],
+    active: NDArray[np.int64],
+    gaussian_scale: float,
+    factor: NDArray[np.float64],
+    rng: np.random.Generator,
+) -> _EnsembleProposalBatch:
+    """Propose symmetric Gaussian steps using frozen survivor geometry."""
+    ndim = ensemble_theta.shape[1]
+    proposals = np.empty((len(active), ndim), dtype=float)
+    for row, walker in enumerate(active):
+        proposals[row] = ensemble_theta[walker] + gaussian_scale * (
+            factor @ rng.standard_normal(ndim)
+        )
+    return _EnsembleProposalBatch(
+        theta=proposals,
+        log_hastings_ratio=np.zeros(len(active), dtype=float),
+        move_name="gaussian",
+    )
+
+
+def _ensemble_move_stats(
+    *,
+    proposed: NDArray[np.int64],
+    valid: NDArray[np.int64],
+    accepted: NDArray[np.int64],
+    moved: NDArray[np.bool_],
+) -> tuple[EnsembleMoveStats, ...]:
+    """Freeze internal per-move counters in canonical order."""
+    return tuple(
+        EnsembleMoveStats(
+            name=name,
+            n_proposed=int(proposed[index]),
+            n_valid=int(valid[index]),
+            n_accepted=int(accepted[index]),
+            n_moved=int(np.count_nonzero(moved[index])),
+        )
+        for index, name in enumerate(_ENSEMBLE_MOVE_NAMES)
+    )
+
+
 def draw_ensemble_rwalk_constrained(
     *,
     evaluator: BatchEvaluator,
@@ -727,7 +916,7 @@ def draw_ensemble_rwalk_constrained(
     max_likelihood_calls: int | None,
     deadline: float | None,
 ) -> ConstrainedAttempt:
-    """Run split differential-evolution MH targeting constrained fixed ``q0``."""
+    """Run a split-ensemble MH mixture targeting constrained fixed ``q0``."""
     _validate_live_arrays(
         evaluator=evaluator,
         live_theta=live_theta,
@@ -757,12 +946,6 @@ def draw_ensemble_rwalk_constrained(
     )
     if len(eligible) < settings.n_walkers:
         return ConstrainedAttempt(None, "insufficient_eligible_walkers", 0, 0)
-    survivors = np.delete(live_theta, worst, axis=0)
-    factor = covariance_factor(
-        survivors,
-        shrinkage=settings.covariance_shrinkage,
-        jitter=settings.covariance_jitter,
-    )
     initial_indices = np.asarray(
         rng.choice(eligible, size=settings.n_walkers, replace=False),
         dtype=np.int64,
@@ -776,16 +959,36 @@ def draw_ensemble_rwalk_constrained(
     ensemble_log_q0 = np.array(live_log_q0[initial_indices], copy=True)
     ensemble_log_psi0 = np.array(live_log_psi0[initial_indices], copy=True)
     ensemble_ties = np.array(live_tie_breakers[initial_indices], copy=True)
-    gamma = (
-        2.38 / np.sqrt(2.0 * evaluator.ndim)
-        if settings.gamma is None
-        else settings.gamma
+    factor_cache: NDArray[np.float64] | None = None
+
+    def frozen_factor() -> NDArray[np.float64]:
+        nonlocal factor_cache
+        if factor_cache is None:
+            survivors = np.delete(live_theta, worst, axis=0)
+            factor_cache = covariance_factor(
+                survivors,
+                shrinkage=settings.covariance_shrinkage,
+                jitter=settings.covariance_jitter,
+            )
+        return factor_cache
+
+    gaussian_scale = (
+        2.38 / np.sqrt(evaluator.ndim)
+        if settings.gaussian_scale is None
+        else settings.gaussian_scale
     )
     n_proposed = 0
     n_valid = 0
     n_accepted = 0
     completed_sweeps = 0
     moved = np.zeros(settings.n_walkers, dtype=bool)
+    move_proposed = np.zeros(len(_ENSEMBLE_MOVE_NAMES), dtype=np.int64)
+    move_valid = np.zeros(len(_ENSEMBLE_MOVE_NAMES), dtype=np.int64)
+    move_accepted = np.zeros(len(_ENSEMBLE_MOVE_NAMES), dtype=np.int64)
+    moved_by_move = np.zeros(
+        (len(_ENSEMBLE_MOVE_NAMES), settings.n_walkers),
+        dtype=bool,
+    )
 
     for _ in range(settings.n_sweeps):
         permutation = np.asarray(rng.permutation(settings.n_walkers), dtype=np.int64)
@@ -804,22 +1007,46 @@ def draw_ensemble_rwalk_constrained(
                     n_accepted,
                     int(np.count_nonzero(moved)),
                     completed_sweeps,
+                    _ensemble_move_stats(
+                        proposed=move_proposed,
+                        valid=move_valid,
+                        accepted=move_accepted,
+                        moved=moved_by_move,
+                    ),
                 )
-            proposals = np.empty((len(active), evaluator.ndim), dtype=float)
-            for row, walker in enumerate(active):
-                references = np.asarray(
-                    rng.choice(complement, size=2, replace=False),
-                    dtype=np.int64,
+            move_name = _select_ensemble_move(
+                move_weights=settings.move_weights,
+                rng=rng,
+            )
+            if move_name == "de":
+                proposal = _propose_de_move(
+                    ensemble_theta=ensemble_theta,
+                    active=active,
+                    complement=complement,
+                    settings=settings,
+                    factor=frozen_factor(),
+                    rng=rng,
                 )
-                difference = (
-                    ensemble_theta[references[0]] - ensemble_theta[references[1]]
+            elif move_name == "stretch":
+                proposal = _propose_stretch_move(
+                    ensemble_theta=ensemble_theta,
+                    active=active,
+                    complement=complement,
+                    stretch_scale=settings.stretch_scale,
+                    rng=rng,
                 )
-                jitter = settings.jitter_scale * (
-                    factor @ rng.normal(size=evaluator.ndim)
+            else:
+                proposal = _propose_gaussian_move(
+                    ensemble_theta=ensemble_theta,
+                    active=active,
+                    gaussian_scale=gaussian_scale,
+                    factor=frozen_factor(),
+                    rng=rng,
                 )
-                proposals[row] = ensemble_theta[walker] + gamma * difference + jitter
-            batch = evaluator.evaluate(proposals)
+            move_index = _ENSEMBLE_MOVE_NAMES.index(proposal.move_name)
+            batch = evaluator.evaluate(proposal.theta)
             n_proposed += len(active)
+            move_proposed[move_index] += len(active)
             proposed_ties = np.asarray(rng.random(len(active)), dtype=float)
             valid = np.asarray(
                 passes_constraint(
@@ -831,13 +1058,16 @@ def draw_ensemble_rwalk_constrained(
                 ),
                 dtype=bool,
             )
-            n_valid += int(np.count_nonzero(valid))
+            valid_count = int(np.count_nonzero(valid))
+            n_valid += valid_count
+            move_valid[move_index] += valid_count
             for row, walker in enumerate(active):
                 if not valid[row]:
                     continue
-                if not accepts_log_q0_metropolis(
+                if not accepts_metropolis(
                     current_log_q0=float(ensemble_log_q0[walker]),
                     proposed_log_q0=float(batch.log_q0[row]),
+                    log_hastings_ratio=float(proposal.log_hastings_ratio[row]),
                     rng=rng,
                 ):
                     continue
@@ -848,7 +1078,9 @@ def draw_ensemble_rwalk_constrained(
                 ensemble_log_psi0[walker] = batch.log_psi0[row]
                 ensemble_ties[walker] = proposed_ties[row]
                 n_accepted += 1
+                move_accepted[move_index] += 1
                 moved[walker] = True
+                moved_by_move[move_index, walker] = True
         completed_sweeps += 1
 
     replacement_index = int(rng.integers(settings.n_walkers))
@@ -869,4 +1101,10 @@ def draw_ensemble_rwalk_constrained(
         n_accepted,
         int(np.count_nonzero(moved)),
         completed_sweeps,
+        _ensemble_move_stats(
+            proposed=move_proposed,
+            valid=move_valid,
+            accepted=move_accepted,
+            moved=moved_by_move,
+        ),
     )

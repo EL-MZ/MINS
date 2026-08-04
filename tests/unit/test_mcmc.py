@@ -10,8 +10,10 @@ from tests.helpers import StandardNormalProposal
 from mins import (
     CallableModel,
     ConfigurationError,
+    EnsembleMoveWeights,
     EnsembleRWalkSettings,
     MINSConfig,
+    NumericalInvariantError,
     RWalkSettings,
     SRWalkSettings,
 )
@@ -19,14 +21,19 @@ from mins.constrained import BatchEvaluator, passes_constraint
 from mins.mcmc import (
     RWalkSampler,
     SRWalkSampler,
+    _propose_gaussian_move,
+    _propose_stretch_move,
     _random_unit_ball,
+    _select_ensemble_move,
     accepts_log_q0_metropolis,
+    accepts_metropolis,
     bounding_ellipsoid_axes,
     covariance_factor,
     draw_ensemble_rwalk_constrained,
     draw_rwalk_constrained,
     draw_srwalk_constrained,
     eligible_survivor_indices,
+    log_metropolis_acceptance_ratio,
 )
 
 pytestmark = pytest.mark.unit
@@ -206,6 +213,56 @@ def test_ensemble_settings_reject_invalid_values(kwargs: dict[str, Any]) -> None
         EnsembleRWalkSettings(**kwargs)
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"de": -1.0},
+        {"stretch": np.nan},
+        {"gaussian": np.inf},
+        {"de": True},
+        {"de": 0.0, "stretch": 0.0, "gaussian": 0.0},
+    ],
+)
+def test_ensemble_move_weights_reject_invalid_values(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ConfigurationError):
+        EnsembleMoveWeights(**kwargs)
+
+
+def test_ensemble_move_weights_normalize_active_moves_in_canonical_order() -> None:
+    weights = EnsembleMoveWeights(de=6, stretch=3, gaussian=1)
+    names, probabilities = weights.active_names_and_probabilities
+    assert names == ("de", "stretch", "gaussian")
+    assert probabilities == pytest.approx((0.6, 0.3, 0.1))
+    huge = np.finfo(float).max
+    assert EnsembleMoveWeights(
+        de=huge,
+        stretch=huge,
+        gaussian=huge,
+    ).active_names_and_probabilities[1] == pytest.approx((1 / 3, 1 / 3, 1 / 3))
+    assert EnsembleRWalkSettings().move_weights == EnsembleMoveWeights()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"stretch_scale": 1.0},
+        {"stretch_scale": 0.5},
+        {"stretch_scale": np.inf},
+        {"stretch_scale": np.nan},
+        {"gaussian_scale": 0.0},
+        {"gaussian_scale": -1.0},
+        {"gaussian_scale": np.inf},
+        {"gaussian_scale": np.nan},
+        {"move_weights": {"de": 1.0}},
+    ],
+)
+def test_ensemble_settings_reject_invalid_mixture_values(
+    kwargs: dict[str, Any],
+) -> None:
+    with pytest.raises(ConfigurationError):
+        EnsembleRWalkSettings(**kwargs)
+
+
 def test_ensemble_size_is_checked_against_live_survivors() -> None:
     with pytest.raises(ConfigurationError, match="n_live"):
         MINSConfig(
@@ -288,6 +345,157 @@ def test_fixed_q0_ratio_can_reject_a_point_above_the_constraint() -> None:
         proposed_log_q0=0.0,
         rng=accepted_rng,
     )
+
+
+def test_general_metropolis_ratio_validates_and_applies_hastings_term() -> None:
+    assert log_metropolis_acceptance_ratio(
+        current_log_q0=0.0,
+        proposed_log_q0=-1.0,
+        log_hastings_ratio=0.25,
+    ) == pytest.approx(-0.75)
+    assert (
+        log_metropolis_acceptance_ratio(
+            current_log_q0=0.0,
+            proposed_log_q0=-np.inf,
+        )
+        == -np.inf
+    )
+    assert (
+        log_metropolis_acceptance_ratio(
+            current_log_q0=0.0,
+            proposed_log_q0=0.0,
+            log_hastings_ratio=-np.inf,
+        )
+        == -np.inf
+    )
+    for invalid in (np.nan, np.inf, -np.inf):
+        with pytest.raises(NumericalInvariantError):
+            log_metropolis_acceptance_ratio(
+                current_log_q0=invalid,
+                proposed_log_q0=0.0,
+            )
+    for invalid in (np.nan, np.inf):
+        with pytest.raises(NumericalInvariantError):
+            log_metropolis_acceptance_ratio(
+                current_log_q0=0.0,
+                proposed_log_q0=invalid,
+            )
+        with pytest.raises(NumericalInvariantError):
+            log_metropolis_acceptance_ratio(
+                current_log_q0=0.0,
+                proposed_log_q0=0.0,
+                log_hastings_ratio=invalid,
+            )
+
+
+def test_stretch_hastings_term_can_change_the_acceptance_decision() -> None:
+    symmetric = accepts_log_q0_metropolis(
+        current_log_q0=0.0,
+        proposed_log_q0=-1.0,
+        rng=np.random.default_rng(1),
+    )
+    corrected = accepts_metropolis(
+        current_log_q0=0.0,
+        proposed_log_q0=-1.0,
+        log_hastings_ratio=2.0,
+        rng=np.random.default_rng(1),
+    )
+    assert not symmetric
+    assert corrected
+
+
+def test_pure_ensemble_move_selection_consumes_no_rng_draw() -> None:
+    class NoChoice:
+        def choice(self, *args: Any, **kwargs: Any) -> int:
+            raise AssertionError("pure move selection must not consume RNG")
+
+    configurations = (
+        (EnsembleMoveWeights(de=1, stretch=0, gaussian=0), "de"),
+        (EnsembleMoveWeights(de=0, stretch=1, gaussian=0), "stretch"),
+        (EnsembleMoveWeights(de=0, stretch=0, gaussian=1), "gaussian"),
+    )
+    for weights, expected in configurations:
+        assert (
+            _select_ensemble_move(
+                move_weights=weights,
+                rng=NoChoice(),  # type: ignore[arg-type]
+            )
+            == expected
+        )
+
+
+def test_weighted_ensemble_move_selection_is_reproducible_and_normalized() -> None:
+    weights = EnsembleMoveWeights(de=6, stretch=3, gaussian=1)
+
+    def selected(seed: int) -> list[str]:
+        rng = np.random.default_rng(seed)
+        return [
+            _select_ensemble_move(move_weights=weights, rng=rng) for _ in range(20_000)
+        ]
+
+    first = selected(112)
+    assert first == selected(112)
+    frequencies = np.array(
+        [first.count(name) for name in ("de", "stretch", "gaussian")]
+    )
+    np.testing.assert_allclose(frequencies / len(first), [0.6, 0.3, 0.1], atol=0.01)
+    zero_weight_draws = [
+        _select_ensemble_move(
+            move_weights=EnsembleMoveWeights(de=2, stretch=1, gaussian=0),
+            rng=np.random.default_rng(seed),
+        )
+        for seed in range(1_000)
+    ]
+    assert "gaussian" not in zero_weight_draws
+
+
+def test_stretch_move_uses_exact_factor_and_hastings_formula() -> None:
+    ensemble = np.array(
+        [[0.0, 1.0, 2.0], [2.0, 3.0, 4.0], [5.0, 6.0, 7.0], [8.0, 9.0, 10.0]]
+    )
+    active = np.array([0, 1], dtype=np.int64)
+    complement = np.array([2, 3], dtype=np.int64)
+    scale = 2.5
+    expected_rng = np.random.default_rng(401)
+    references = expected_rng.choice(complement, size=2, replace=True)
+    uniform = expected_rng.random(2)
+    stretch = ((scale - 1.0) * uniform + 1.0) ** 2 / scale
+    expected = ensemble[references] + stretch[:, np.newaxis] * (
+        ensemble[active] - ensemble[references]
+    )
+
+    proposal = _propose_stretch_move(
+        ensemble_theta=ensemble,
+        active=active,
+        complement=complement,
+        stretch_scale=scale,
+        rng=np.random.default_rng(401),
+    )
+    np.testing.assert_allclose(proposal.theta, expected)
+    np.testing.assert_allclose(proposal.log_hastings_ratio, 2.0 * np.log(stretch))
+    assert np.all(stretch >= 1.0 / scale)
+    assert np.all(stretch <= scale)
+
+
+def test_gaussian_move_respects_scale_and_has_zero_hastings_ratio() -> None:
+    ensemble = np.array([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0], [6.0, 7.0]])
+    active = np.array([0, 1], dtype=np.int64)
+    factor = np.diag([2.0, 3.0])
+    expected_rng = np.random.default_rng(99)
+    expected = np.empty((2, 2))
+    for row, walker in enumerate(active):
+        expected[row] = ensemble[walker] + 0.25 * (
+            factor @ expected_rng.standard_normal(2)
+        )
+    proposal = _propose_gaussian_move(
+        ensemble_theta=ensemble,
+        active=active,
+        gaussian_scale=0.25,
+        factor=factor,
+        rng=np.random.default_rng(99),
+    )
+    np.testing.assert_allclose(proposal.theta, expected)
+    np.testing.assert_array_equal(proposal.log_hastings_ratio, np.zeros(2))
 
 
 def _all_rejected_problem() -> tuple[
@@ -658,6 +866,283 @@ def test_ensemble_walk_has_exact_counts_and_reproducible_output() -> None:
     assert attempts[0].n_valid == 0
     assert attempts[0].n_accepted == 0
     assert attempts[0].n_moved == 0
+    assert attempts[0].draw.point.theta[0] == 3.0
+    assert tuple(stat.name for stat in attempts[0].ensemble_move_stats) == (
+        "de",
+        "stretch",
+        "gaussian",
+    )
+    assert sum(stat.n_proposed for stat in attempts[0].ensemble_move_stats) == 12
+
+
+@pytest.mark.parametrize(
+    ("weights", "expected_covariance_calls"),
+    [
+        (EnsembleMoveWeights(de=1, stretch=0, gaussian=0), 1),
+        (EnsembleMoveWeights(de=0, stretch=1, gaussian=0), 0),
+        (EnsembleMoveWeights(de=0, stretch=0, gaussian=1), 1),
+    ],
+)
+def test_ensemble_covariance_is_lazy_frozen_and_excludes_discarded_point(
+    monkeypatch: pytest.MonkeyPatch,
+    weights: EnsembleMoveWeights,
+    expected_covariance_calls: int,
+) -> None:
+    evaluator, theta, log_likelihood, log_prior, log_q0, log_psi0, ties = (
+        _all_rejected_problem()
+    )
+    covariance_calls = 0
+
+    def counted_covariance(
+        points: NDArray[np.float64],
+        *,
+        shrinkage: float,
+        jitter: float,
+    ) -> NDArray[np.float64]:
+        nonlocal covariance_calls
+        covariance_calls += 1
+        np.testing.assert_array_equal(points, theta[1:])
+        assert shrinkage == 0.2
+        assert jitter == 1.0e-8
+        return np.ones((1, 1))
+
+    monkeypatch.setattr("mins.mcmc.covariance_factor", counted_covariance)
+    attempt = draw_ensemble_rwalk_constrained(
+        evaluator=evaluator,
+        live_theta=theta,
+        live_log_likelihood=log_likelihood,
+        live_log_prior=log_prior,
+        live_log_q0=log_q0,
+        live_log_psi0=log_psi0,
+        live_tie_breakers=ties,
+        worst=0,
+        threshold=0.0,
+        threshold_tie_breaker=ties[0],
+        tie_policy="strict",
+        settings=EnsembleRWalkSettings(
+            n_walkers=4,
+            n_sweeps=3,
+            move_weights=weights,
+            covariance_shrinkage=0.2,
+            covariance_jitter=1.0e-8,
+        ),
+        rng=np.random.default_rng(709),
+        max_proposals=12,
+        max_likelihood_calls=None,
+        deadline=None,
+    )
+    assert attempt.draw is not None
+    assert covariance_calls == expected_covariance_calls
+    assert attempt.n_proposed == 12
+    assert evaluator.n_likelihood_calls == 12
+    assert sum(stat.n_proposed for stat in attempt.ensemble_move_stats) == 12
+    assert sum(stat.n_valid for stat in attempt.ensemble_move_stats) == 0
+    assert sum(stat.n_accepted for stat in attempt.ensemble_move_stats) == 0
+
+
+@pytest.mark.parametrize(
+    ("configured_scale", "expected_scale"),
+    [(None, 2.38), (0.125, 0.125)],
+)
+def test_ensemble_gaussian_scale_is_resolved_once_and_frozen(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_scale: float | None,
+    expected_scale: float,
+) -> None:
+    evaluator, theta, log_likelihood, log_prior, log_q0, log_psi0, ties = (
+        _all_rejected_problem()
+    )
+    observed_scales: list[float] = []
+
+    def captured_gaussian(
+        *,
+        ensemble_theta: NDArray[np.float64],
+        active: NDArray[np.int64],
+        gaussian_scale: float,
+        factor: NDArray[np.float64],
+        rng: np.random.Generator,
+    ) -> Any:
+        observed_scales.append(gaussian_scale)
+        return _propose_gaussian_move(
+            ensemble_theta=ensemble_theta,
+            active=active,
+            gaussian_scale=gaussian_scale,
+            factor=factor,
+            rng=rng,
+        )
+
+    monkeypatch.setattr("mins.mcmc._propose_gaussian_move", captured_gaussian)
+    monkeypatch.setattr(
+        "mins.mcmc.covariance_factor",
+        lambda *args, **kwargs: np.ones((1, 1)),
+    )
+    attempt = draw_ensemble_rwalk_constrained(
+        evaluator=evaluator,
+        live_theta=theta,
+        live_log_likelihood=log_likelihood,
+        live_log_prior=log_prior,
+        live_log_q0=log_q0,
+        live_log_psi0=log_psi0,
+        live_tie_breakers=ties,
+        worst=0,
+        threshold=0.0,
+        threshold_tie_breaker=ties[0],
+        tie_policy="strict",
+        settings=EnsembleRWalkSettings(
+            n_walkers=4,
+            n_sweeps=2,
+            move_weights=EnsembleMoveWeights(de=0, stretch=0, gaussian=1),
+            gaussian_scale=configured_scale,
+        ),
+        rng=np.random.default_rng(219),
+        max_proposals=8,
+        max_likelihood_calls=None,
+        deadline=None,
+    )
+    assert attempt.draw is not None
+    assert observed_scales == pytest.approx([expected_scale] * 4)
+
+
+def test_ensemble_selects_one_move_per_half_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluator, theta, log_likelihood, log_prior, log_q0, log_psi0, ties = (
+        _all_rejected_problem()
+    )
+    selections = 0
+
+    def counted_selection(**kwargs: Any) -> str:
+        nonlocal selections
+        selections += 1
+        return "stretch"
+
+    monkeypatch.setattr("mins.mcmc._select_ensemble_move", counted_selection)
+    attempt = draw_ensemble_rwalk_constrained(
+        evaluator=evaluator,
+        live_theta=theta,
+        live_log_likelihood=log_likelihood,
+        live_log_prior=log_prior,
+        live_log_q0=log_q0,
+        live_log_psi0=log_psi0,
+        live_tie_breakers=ties,
+        worst=0,
+        threshold=0.0,
+        threshold_tie_breaker=ties[0],
+        tie_policy="strict",
+        settings=EnsembleRWalkSettings(n_walkers=4, n_sweeps=4),
+        rng=np.random.default_rng(761),
+        max_proposals=16,
+        max_likelihood_calls=None,
+        deadline=None,
+    )
+    assert attempt.draw is not None
+    assert selections == 8
+    assert attempt.ensemble_move_stats[1].n_proposed == 16
+
+
+def test_gaussian_ensemble_acceptance_updates_all_cached_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FlatProposal:
+        ndim = 1
+
+        def log_prob(self, theta: NDArray[np.float64]) -> NDArray[np.float64]:
+            return np.zeros(len(theta))
+
+    proposal = FlatProposal()
+    model = CallableModel(
+        ndim=1,
+        parameter_names=("x",),
+        log_likelihood_fn=lambda theta: 10.0 + theta[:, 0],
+        log_prior_fn=proposal.log_prob,
+    )
+    theta = np.arange(6.0)[:, np.newaxis]
+    log_likelihood = 10.0 + theta[:, 0]
+    zeros = np.zeros(6)
+    ties = np.linspace(0.1, 0.6, 6)
+    monkeypatch.setattr(
+        "mins.mcmc.covariance_factor",
+        lambda *args, **kwargs: np.ones((1, 1)),
+    )
+    attempt = draw_ensemble_rwalk_constrained(
+        evaluator=BatchEvaluator(model, proposal),
+        live_theta=theta,
+        live_log_likelihood=log_likelihood,
+        live_log_prior=zeros,
+        live_log_q0=zeros,
+        live_log_psi0=log_likelihood,
+        live_tie_breakers=ties,
+        worst=0,
+        threshold=-100.0,
+        threshold_tie_breaker=ties[0],
+        tie_policy="strict",
+        settings=EnsembleRWalkSettings(
+            n_walkers=4,
+            n_sweeps=1,
+            move_weights=EnsembleMoveWeights(de=0, stretch=0, gaussian=1),
+            gaussian_scale=0.01,
+        ),
+        rng=np.random.default_rng(909),
+        max_proposals=4,
+        max_likelihood_calls=None,
+        deadline=None,
+    )
+    assert attempt.draw is not None
+    point = attempt.draw.point
+    assert point.log_likelihood == pytest.approx(10.0 + point.theta[0])
+    assert point.log_prior == 0.0
+    assert point.log_q0 == 0.0
+    assert point.log_psi0 == pytest.approx(10.0 + point.theta[0])
+    assert attempt.n_valid == 4
+    assert attempt.n_accepted == 4
+    assert attempt.n_moved == 4
+
+
+def test_gaussian_ensemble_rejection_retains_all_cached_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluator, theta, log_likelihood, log_prior, log_q0, log_psi0, ties = (
+        _all_rejected_problem()
+    )
+    monkeypatch.setattr(
+        "mins.mcmc.covariance_factor",
+        lambda *args, **kwargs: np.ones((1, 1)),
+    )
+    attempt = draw_ensemble_rwalk_constrained(
+        evaluator=evaluator,
+        live_theta=theta,
+        live_log_likelihood=log_likelihood,
+        live_log_prior=log_prior,
+        live_log_q0=log_q0,
+        live_log_psi0=log_psi0,
+        live_tie_breakers=ties,
+        worst=0,
+        threshold=0.0,
+        threshold_tie_breaker=ties[0],
+        tie_policy="strict",
+        settings=EnsembleRWalkSettings(
+            n_walkers=4,
+            n_sweeps=2,
+            move_weights=EnsembleMoveWeights(de=0, stretch=0, gaussian=1),
+        ),
+        rng=np.random.default_rng(512),
+        max_proposals=8,
+        max_likelihood_calls=None,
+        deadline=None,
+    )
+    assert attempt.draw is not None
+    point = attempt.draw.point
+    matching = np.flatnonzero(theta[:, 0] == point.theta[0])
+    assert len(matching) == 1
+    index = int(matching[0])
+    assert point.log_likelihood == log_likelihood[index]
+    assert point.log_prior == log_prior[index]
+    assert point.log_q0 == log_q0[index]
+    assert point.log_psi0 == log_psi0[index]
+    assert point.tie_breaker == ties[index]
+    assert attempt.n_valid == 0
+    assert attempt.n_accepted == 0
+    assert attempt.n_moved == 0
 
 
 def test_mcmc_preflight_does_not_start_a_shortened_evolution() -> None:

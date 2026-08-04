@@ -119,6 +119,45 @@ class RunHistory:
 
 
 @dataclass(frozen=True, slots=True)
+class EnsembleMoveHistory:
+    """Immutable per-iteration diagnostics for ensemble proposal moves."""
+
+    names: tuple[str, ...]
+    proposed: NDArray[np.int64]
+    valid: NDArray[np.int64]
+    accepted: NDArray[np.int64]
+    moved: NDArray[np.int64]
+
+    def __post_init__(self) -> None:
+        names = tuple(self.names)
+        if names != ("de", "stretch", "gaussian"):
+            raise ValueError(
+                "ensemble move history names must use canonical move order"
+            )
+        expected_shape: tuple[int, ...] | None = None
+        for name in ("proposed", "valid", "accepted", "moved"):
+            array = _readonly(getattr(self, name), dtype=np.int64)
+            if array.ndim != 2 or array.shape[1] != len(names):
+                raise ValueError(
+                    f"ensemble move history {name} must have shape (niter, 3)"
+                )
+            if np.any(array < 0):
+                raise ValueError("ensemble move history counts must be non-negative")
+            if expected_shape is None:
+                expected_shape = array.shape
+            elif array.shape != expected_shape:
+                raise ValueError("ensemble move history arrays must have equal shape")
+            object.__setattr__(self, name, array)
+        if np.any(self.valid > self.proposed):
+            raise ValueError("ensemble valid counts cannot exceed proposed counts")
+        if np.any(self.accepted > self.valid):
+            raise ValueError("ensemble accepted counts cannot exceed valid counts")
+        if np.any(self.moved > self.accepted):
+            raise ValueError("ensemble moved counts cannot exceed accepted counts")
+        object.__setattr__(self, "names", names)
+
+
+@dataclass(frozen=True, slots=True)
 class MINSResult:
     """Complete immutable output of a fixed-importance MINS run.
 
@@ -160,6 +199,7 @@ class MINSResult:
     proposal_updates: tuple[ProposalUpdateRecord, ...]
     nonfinite_counts: tuple[tuple[str, int], ...]
     warnings: tuple[str, ...]
+    ensemble_move_history: EnsembleMoveHistory | None = None
 
     def __post_init__(self) -> None:
         if self.nlive != self.config.n_live:
@@ -168,6 +208,15 @@ class MINSResult:
             raise ValueError("niter must equal the number of dead points")
         if len(self.history.iteration) != self.niter:
             raise ValueError("history length must equal niter")
+        if self.config.proposal_scheme == "en-rwalk":
+            if self.ensemble_move_history is None:
+                raise ValueError("en-rwalk results require ensemble move history")
+            if self.ensemble_move_history.proposed.shape != (self.niter, 3):
+                raise ValueError("ensemble move history must have shape (niter, 3)")
+        elif self.ensemble_move_history is not None:
+            raise ValueError(
+                "ensemble move history is only valid for proposal_scheme='en-rwalk'"
+            )
         ndim = (
             self.final_live_points.shape[1] if self.final_live_points.ndim == 2 else -1
         )

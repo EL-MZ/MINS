@@ -20,6 +20,11 @@ All notable changes to this project are documented here.
 - Added a separate statistically specified Gaussian-covariance `"s-rwalk"`
   kernel with fixed-per-replacement survivor geometry, exact fixed-`q0` MH
   correction, and acceptance-target scale adaptation.
+- Extended `"en-rwalk"` with fixed weighted mixtures of the existing
+  differential-evolution move, a Jacobian-corrected Goodman--Weare stretch
+  move, and a frozen-covariance Gaussian move. Added `EnsembleMoveWeights`,
+  general Hastings-ratio acceptance, and immutable per-move result history;
+  the default remains seeded-compatible DE-only behavior.
 
 ## 0.1.0.dev3 - 2026-07-25
 

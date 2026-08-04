@@ -43,7 +43,7 @@ from .quadrature import (
     finalize_quadrature,
     update_log_weighted_mean,
 )
-from .results import MINSResult, RunHistory
+from .results import EnsembleMoveHistory, MINSResult, RunHistory
 from .stopping import (
     SCIENTIFIC_TERMINATION_REASONS,
     StoppingPolicy,
@@ -460,6 +460,10 @@ class MINSampler:
         history_proposal_revision: list[int] = []
         history_proposal_update_attempts: list[int] = []
         history_proposal_update_failures: list[int] = []
+        ensemble_move_proposed: list[tuple[int, ...]] = []
+        ensemble_move_valid: list[tuple[int, ...]] = []
+        ensemble_move_accepted: list[tuple[int, ...]] = []
+        ensemble_move_moved: list[tuple[int, ...]] = []
 
         niter = 0
         n_proposals = 0
@@ -619,6 +623,27 @@ class MINSampler:
                 history_mcmc_accepted.append(0)
                 history_mcmc_moved.append(0)
                 history_mcmc_completed.append(0)
+            if config.proposal_scheme == "en-rwalk":
+                if tuple(stat.name for stat in attempt.ensemble_move_stats) != (
+                    "de",
+                    "stretch",
+                    "gaussian",
+                ):
+                    raise RuntimeError(
+                        "ensemble move statistics do not use canonical move order"
+                    )
+                ensemble_move_proposed.append(
+                    tuple(stat.n_proposed for stat in attempt.ensemble_move_stats)
+                )
+                ensemble_move_valid.append(
+                    tuple(stat.n_valid for stat in attempt.ensemble_move_stats)
+                )
+                ensemble_move_accepted.append(
+                    tuple(stat.n_accepted for stat in attempt.ensemble_move_stats)
+                )
+                ensemble_move_moved.append(
+                    tuple(stat.n_moved for stat in attempt.ensemble_move_stats)
+                )
             history_elapsed.append(elapsed)
             if self.adaptive_proposal_controller is None:
                 proposal_revision = 0
@@ -750,6 +775,22 @@ class MINSampler:
             if self.adaptive_proposal_controller is None
             else self.adaptive_proposal_controller.records
         )
+        ensemble_move_history = (
+            EnsembleMoveHistory(
+                names=("de", "stretch", "gaussian"),
+                proposed=np.asarray(ensemble_move_proposed, dtype=np.int64).reshape(
+                    niter, 3
+                ),
+                valid=np.asarray(ensemble_move_valid, dtype=np.int64).reshape(niter, 3),
+                accepted=np.asarray(
+                    ensemble_move_accepted,
+                    dtype=np.int64,
+                ).reshape(niter, 3),
+                moved=np.asarray(ensemble_move_moved, dtype=np.int64).reshape(niter, 3),
+            )
+            if config.proposal_scheme == "en-rwalk"
+            else None
+        )
         final_state = copy.deepcopy(self.rng.bit_generator.state)
         ndim = self.model.ndim
         return MINSResult(
@@ -790,4 +831,5 @@ class MINSampler:
                 ("zero_likelihood", evaluator.zero_likelihood),
             ),
             warnings=tuple(warnings),
+            ensemble_move_history=ensemble_move_history,
         )

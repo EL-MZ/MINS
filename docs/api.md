@@ -124,6 +124,62 @@ evaluated with
 `log_psi0 = log_likelihood + log_prior - log_q0`, where `log_q0` always comes
 from that original object.
 
+The proposal scheme is one of `"fixed_morph"`, `"adaptive_morph"`, `"rwalk"`,
+`"s-rwalk"`, or `"en-rwalk"`. The immutable MCMC configuration objects are
+public:
+
+```python
+from mins import EnsembleRWalkSettings, RWalkSettings, SRWalkSettings
+
+rwalk = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="rwalk",
+    rwalk_settings=RWalkSettings(
+        walks=50,
+        facc=0.5,
+        ncdim=None,
+    ),
+    n_live=200,
+    rng=42,
+)
+
+statistical_rwalk = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="s-rwalk",
+    srwalk_settings=SRWalkSettings(
+        n_steps=50,
+        scale=None,
+        facc=0.5,
+        covariance_shrinkage=0.1,
+        covariance_jitter=1e-10,
+    ),
+    n_live=200,
+    rng=42,
+)
+
+ensemble = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="en-rwalk",
+    ensemble_rwalk_settings=EnsembleRWalkSettings(
+        n_walkers=8,
+        n_sweeps=6,
+        gamma=None,
+        jitter_scale=1e-6,
+        covariance_shrinkage=0.1,
+        covariance_jitter=1e-10,
+    ),
+    n_live=200,
+    rng=42,
+)
+```
+
+`MINSConfig` stores all three settings objects, and
+`MINSampler.from_posterior_samples` accepts them as well. Ensemble walker
+count must be even, at least four, and no greater than `n_live - 1`.
+
 `proposal_scheme="fixed_morph"` uses the importance Morph for constrained
 draws and preserves the original rejection sampler. With
 `proposal_scheme="adaptive_morph"`, the sampler refits a separate proposal
@@ -136,6 +192,36 @@ Adaptive candidates are accepted directly when they pass the old-Morph
 `log_psi0` constraint. This samples the refitted proposal under the constraint,
 not constrained `q0`; no MH or density-ratio correction is applied. Adaptive
 `logZ` and posterior weights are therefore heuristic and may be biased.
+
+`proposal_scheme="rwalk"` selects an eligible survivor uniformly and performs
+exactly `walks` symmetric ellipsoidal-ball Metropolis transitions. Omitting
+`walks` uses `model.ndim + 20`. The initial scale is 1 and is tuned toward
+`facc` after each completed replacement. A Dynesty-style single ellipsoid is
+built from the complete live set and cached for approximately
+`walks * n_live` calls. `ncdim` must be omitted or equal to `model.ndim`.
+`proposal_scheme="s-rwalk"` instead attempts exactly `n_steps` Gaussian
+Metropolis transitions using a regularized covariance computed from the
+survivors and frozen for that replacement. Its initial scale defaults to
+`2.38 / sqrt(model.ndim)`; an explicit `scale` replaces that initial value.
+After each complete chain, the scale is tuned toward `facc` using the same
+recursion as `rwalk`.
+
+`proposal_scheme="en-rwalk"` selects distinct eligible survivors and performs
+split-half differential-evolution Metropolis updates. The complementary half
+is fixed while a half is generated and evaluated. Its final replacement is a
+uniform selection from every final walker, including unchanged walkers.
+
+For all three MCMC modes, a candidate must first pass the fixed-`log_psi0`
+constraint. Its log acceptance ratio is then
+`min(0, proposed.log_q0 - current.log_q0)`. The discarded point supplies the
+threshold but is outside the strict constraint and is never an MCMC starting
+state. Proposals are not clipped or redrawn at prior boundaries.
+
+The complete contract, proposal equations, resource behavior, and mixing
+limitations are in [MCMC replacements](mcmc_replacements.md).
+
+For a standard random-walk sampler, `sampler.citations` reports the Skilling
+(2006) method citation.
 
 `tie_policy="strict"` is correct for ordinary continuous pseudo-likelihoods.
 Use `"randomized_plateau"` for targets with exact nonzero-probability ties. It
@@ -165,7 +251,11 @@ receives integer met flags named `criterion_<name>_met` for each enabled
 criterion. Library code does not otherwise print, display, or write files.
 
 Progress mappings and `RunHistory` also include `proposal_revision`,
-`proposal_update_attempts`, and `proposal_update_failures`.
+`proposal_update_attempts`, and `proposal_update_failures`. MCMC iterations
+add `mh_acceptance_fraction`, `constraint_pass_fraction`, `mcmc_accepted`,
+`mcmc_moved`, and `mcmc_completed`. For non-MCMC modes the two fractions are
+`NaN` and the three counts are zero. The existing `acceptance_fraction`
+retains its cumulative nested-replacement-efficiency meaning.
 
 ## Result
 
@@ -207,7 +297,8 @@ dead/live/total log evidence, information, `logzerr`, remaining fraction,
 remaining log-evidence increment, live pseudo-likelihood ESS, live-mean RSE,
 live log-evidence error, log-evidence stability, stopping streak, live
 pseudo-likelihood range, calls, proposal counts, acceptance fraction, elapsed
-time, and proposal update counters. Every array is read-only and has shape
+time, MCMC constraint/MH counts and fractions, and proposal update counters.
+Every array is read-only and has shape
 `(niter,)`; early `logz_stability` entries are `NaN` until its exact window is
 available.
 
@@ -224,6 +315,9 @@ Both have `success=True`. Hard stops include:
 - `max_likelihood_calls`;
 - `max_wall_time`;
 - `constrained_sampling_exhausted`;
+- `max_proposals_per_replacement`;
+- `insufficient_eligible_survivors`;
+- `insufficient_eligible_walkers`;
 - `plateau_stall`.
 
 Hard stops return a valid partial result with the current final-live correction.
@@ -240,5 +334,8 @@ maximum proposals per replacement, threshold monotonicity, the separate
 conservative max-live remainder, and the final values of every stopping
 diagnostic and streak.
 
-`plot_run`, `plot_weight_health`, and `plot_posterior_1d` return Matplotlib
-objects. They never call `show` or save files.
+`plot_run`, `plot_nested_progress`, `plot_weight_health`, and
+`plot_posterior_1d` return Matplotlib objects. `plot_nested_progress` shows the
+stored live-set pseudo-likelihood envelope and median, remaining live
+`logz_live`, and discarded-threshold trajectory. Plot helpers never call
+`show` or save files.

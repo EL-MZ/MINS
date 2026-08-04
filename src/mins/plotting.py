@@ -68,6 +68,84 @@ def plot_run(result: MINSResult) -> tuple[Any, Any]:
     return figure, axes
 
 
+def plot_nested_progress(result: MINSResult) -> tuple[Any, Any]:
+    """Plot live-set, remaining-evidence, and threshold progression.
+
+    The live-set panel uses the stored minimum, median, and maximum
+    pseudo-likelihood rather than retaining an ``(niter, nlive)`` trace.  The
+    remaining-evidence panel shows ``logz_live``, the logarithm of the current
+    mean-live estimate of evidence still inside the active volume.
+
+    Returns
+    -------
+    tuple
+        ``(figure, axes)`` where ``axes`` contains three aligned Matplotlib
+        axes. The function never calls ``show`` or writes files.
+    """
+    import matplotlib.pyplot as plt
+
+    history = result.history
+    iteration = history.iteration
+    figure, axes = plt.subplots(3, 1, sharex=True, figsize=(9, 9))
+
+    axes[0].fill_between(
+        iteration,
+        history.live_min_log_psi,
+        history.live_max_log_psi,
+        color="tab:blue",
+        alpha=0.2,
+        label="live min-max",
+    )
+    axes[0].plot(
+        iteration,
+        history.live_min_log_psi,
+        color="tab:blue",
+        alpha=0.65,
+        linewidth=0.8,
+        label="live minimum",
+    )
+    axes[0].plot(
+        iteration,
+        history.live_median_log_psi,
+        color="tab:blue",
+        linewidth=1.5,
+        label="live median",
+    )
+    axes[0].plot(
+        iteration,
+        history.live_max_log_psi,
+        color="tab:blue",
+        alpha=0.65,
+        linewidth=0.8,
+        label="live maximum",
+    )
+    axes[0].set_ylabel(r"live $\log\Psi_0$")
+    axes[0].set_title(f"Live-set progress (n_live={result.nlive})")
+    axes[0].legend()
+
+    axes[1].plot(
+        iteration,
+        history.logz_live,
+        color="tab:green",
+        label=r"$\log Z_{\rm live}$",
+    )
+    axes[1].set_ylabel(r"remaining $\log Z$")
+    axes[1].legend()
+
+    axes[2].plot(
+        iteration,
+        history.discarded_log_psi,
+        color="tab:red",
+        label="discarded threshold",
+    )
+    axes[2].set_xlabel("iteration")
+    axes[2].set_ylabel(r"threshold $\log\Psi_0$")
+    axes[2].legend()
+
+    figure.tight_layout()
+    return figure, axes
+
+
 def plot_weight_health(result: MINSResult) -> tuple[Any, Any]:
     """Plot sorted posterior weights and cumulative mass."""
     import matplotlib.pyplot as plt

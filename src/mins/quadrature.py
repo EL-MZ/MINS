@@ -160,12 +160,25 @@ def finalize_quadrature(
     live_weights = live_log_contributions(log_x, live_psi)
     contributions = np.concatenate((dead_weights, live_weights))
     all_log_psi = np.concatenate((dead_psi, live_psi))
-    logz = float(logsumexp(contributions))
+    # Normalize after removing the common log-scale explicitly.  Calling
+    # ``logsumexp(contributions)`` and then subtracting that potentially very
+    # large-magnitude result loses precision in high-dimensional problems.
+    # Keeping the subtraction in the shifted frame makes the posterior
+    # weights normalize to working precision even when log(Z) is far from
+    # zero.
+    normalization_offset = float(np.max(contributions))
+    if not np.isfinite(normalization_offset):
+        raise NumericalInvariantError("final evidence is not finite")
+    shifted_contributions = contributions - normalization_offset
+    log_normalizer = float(logsumexp(shifted_contributions))
+    logz = normalization_offset + log_normalizer
     if not np.isfinite(logz):
         raise NumericalInvariantError("final evidence is not finite")
-    log_posterior_weights = contributions - logz
+    log_posterior_weights = shifted_contributions - log_normalizer
     posterior_weights = np.exp(log_posterior_weights)
-    if not np.isclose(np.sum(posterior_weights), 1.0, rtol=1e-12, atol=1e-12):
+    if not np.isclose(
+        logsumexp(log_posterior_weights), 0.0, rtol=0.0, atol=1.0e-12
+    ):
         raise NumericalInvariantError("posterior weights do not sum to one")
     positive = posterior_weights > 0.0
     information = float(

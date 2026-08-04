@@ -112,6 +112,62 @@ The proposal is refitted from all current live rows before replacements 26,
 however: it samples from the refitted proposal under the constraint rather
 than from constrained `q0`, so the resulting `logZ` can be biased.
 
+For a constrained Metropolis replacement that preserves fixed `q0`, choose a
+Dynesty-style walk, the statistically specified Gaussian walk, or an ensemble
+walk:
+
+```python
+from mins import EnsembleRWalkSettings, RWalkSettings, SRWalkSettings
+
+rwalk_sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="rwalk",
+    rwalk_settings=RWalkSettings(walks=50, facc=0.5),
+    n_live=200,
+    rng=42,
+)
+
+statistical_rwalk_sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="s-rwalk",
+    srwalk_settings=SRWalkSettings(n_steps=50, facc=0.5),
+    n_live=200,
+    rng=42,
+)
+
+ensemble_sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="en-rwalk",
+    ensemble_rwalk_settings=EnsembleRWalkSettings(
+        n_walkers=8,
+        n_sweeps=6,
+    ),
+    n_live=200,
+    rng=42,
+)
+```
+
+The discarded live point defines the constraint and is not used as a chain
+start. MCMC replacements remain correlated with eligible survivors. Increasing
+`walks`, `n_steps`, or `n_sweeps` can improve mixing but does not create an
+independence guarantee. Examine `result.history.constraint_pass_fraction`,
+`result.history.mh_acceptance_fraction`, and
+`result.history.mcmc_moved`, and calibrate settings with repeated complete
+runs. Do not discard unchanged outputs or select only walkers that moved;
+conditioning on movement biases the replacement. See the dedicated
+[MCMC replacement guide](mcmc_replacements.md).
+
+If `walks` is omitted, MINS uses `model.ndim + 20`. Standard `rwalk` starts
+with scale 1 and tunes it toward the configured `facc` after every completed
+replacement. `ncdim` is accepted for Dynesty API familiarity but must be
+omitted or equal to the complete model dimension.
+The `s-rwalk` geometry is a regularized covariance of the survivors, frozen
+for all `n_steps` transitions. Its scale starts at `2.38 / sqrt(model.ndim)`
+unless explicitly supplied and adapts toward `facc` between replacements.
+
 ## 5. Obtain equal-weight posterior samples
 
 The native result is weighted:
@@ -140,6 +196,11 @@ array. Duplicate rows are normal. Weighted estimates from `all_points` and
 ```python
 figure, axes = plot_run(result)
 figure.savefig("run.png")
+
+from mins import plot_nested_progress
+
+progress_figure, progress_axes = plot_nested_progress(result)
+progress_figure.savefig("nested_progress.png", dpi=150)
 ```
 
 Plots consume only the result. The full executable Gaussian example is

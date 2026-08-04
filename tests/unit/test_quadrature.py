@@ -57,6 +57,30 @@ def test_finalize_constant_integrand_identity_and_weights() -> None:
     assert np.sum(np.exp(summary.log_posterior_weights)) == pytest.approx(1.0)
 
 
+def test_finalize_normalizes_weights_with_large_log_offset() -> None:
+    """High-dimensional log scales must not degrade weight normalization."""
+    nlive = 100
+    niter = 1_000
+    log_c = -1.0e12
+    dead = np.array(
+        [dead_log_contribution(i, nlive, log_c)[2] for i in range(1, niter + 1)]
+    )
+    summary = finalize_quadrature(
+        dead,
+        np.full(niter, log_c),
+        -niter / nlive,
+        np.full(nlive, log_c),
+        nlive,
+    )
+
+    assert summary.logz == log_c
+    assert logsumexp(summary.log_posterior_weights) == pytest.approx(0.0, abs=1e-15)
+    assert np.sum(np.exp(summary.log_posterior_weights)) == pytest.approx(
+        1.0, abs=1e-15
+    )
+    assert summary.information == pytest.approx(0.0, abs=1e-13)
+
+
 def test_incremental_progress_information_matches_final_quadrature() -> None:
     nlive = 8
     dead_log_psi = np.linspace(-2.0, 0.4, 12)

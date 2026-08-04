@@ -82,6 +82,11 @@ class RunHistory:
     proposals: NDArray[np.int64]
     likelihood_calls: NDArray[np.int64]
     acceptance_fraction: NDArray[np.float64]
+    mh_acceptance_fraction: NDArray[np.float64]
+    constraint_pass_fraction: NDArray[np.float64]
+    mcmc_accepted: NDArray[np.int64]
+    mcmc_moved: NDArray[np.int64]
+    mcmc_completed: NDArray[np.int64]
     elapsed_seconds: NDArray[np.float64]
     proposal_revision: NDArray[np.int64]
     proposal_update_attempts: NDArray[np.int64]
@@ -97,6 +102,9 @@ class RunHistory:
             "proposal_revision",
             "proposal_update_attempts",
             "proposal_update_failures",
+            "mcmc_accepted",
+            "mcmc_moved",
+            "mcmc_completed",
         }
         for field in fields(self):
             values = getattr(self, field.name)

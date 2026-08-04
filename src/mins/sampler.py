@@ -11,11 +11,27 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .adaptive import AdaptiveMorphController
-from .config import MINSConfig, ProposalScheme, TiePolicy
+from .config import (
+    EnsembleRWalkSettings,
+    MINSConfig,
+    ProposalScheme,
+    RWalkSettings,
+    SRWalkSettings,
+    TiePolicy,
+)
 from .constrained import (
     BatchEvaluator,
+    ConstrainedAttempt,
     draw_constrained,
     validate_proposal_sample,
+)
+from .mcmc import (
+    RWALK_CITATIONS,
+    RWalkSampler,
+    SRWalkSampler,
+    draw_ensemble_rwalk_constrained,
+    draw_rwalk_constrained,
+    draw_srwalk_constrained,
 )
 from .model import Model
 from .progress import ProgressOption, create_progress_reporter
@@ -46,6 +62,103 @@ def _as_generator(
     return np.random.default_rng(rng)
 
 
+def _draw_replacement(
+    *,
+    config: MINSConfig,
+    evaluator: BatchEvaluator,
+    proposal_morph: Proposal,
+    live_theta: NDArray[np.float64],
+    live_log_likelihood: NDArray[np.float64],
+    live_log_prior: NDArray[np.float64],
+    live_log_q0: NDArray[np.float64],
+    live_log_psi0: NDArray[np.float64],
+    live_tie_breakers: NDArray[np.float64],
+    worst: int,
+    threshold: float,
+    threshold_tie_breaker: float,
+    rng: np.random.Generator,
+    deadline: float | None,
+    rwalk_sampler: RWalkSampler | None,
+    srwalk_sampler: SRWalkSampler | None,
+) -> ConstrainedAttempt:
+    """Dispatch one replacement without mixing proposal-specific mechanics."""
+    if config.proposal_scheme in ("fixed_morph", "adaptive_morph"):
+        return draw_constrained(
+            evaluator=evaluator,
+            proposal_morph=proposal_morph,
+            threshold=threshold,
+            threshold_tie_breaker=threshold_tie_breaker,
+            tie_policy=config.tie_policy,
+            rng=rng,
+            batch_size=config.proposal_batch_size,
+            max_proposals=config.max_proposals_per_replacement,
+            max_likelihood_calls=config.max_likelihood_calls,
+            deadline=deadline,
+        )
+    if config.proposal_scheme == "rwalk":
+        if rwalk_sampler is None:
+            raise RuntimeError("rwalk controller is not initialized")
+        return draw_rwalk_constrained(
+            evaluator=evaluator,
+            live_theta=live_theta,
+            live_log_likelihood=live_log_likelihood,
+            live_log_prior=live_log_prior,
+            live_log_q0=live_log_q0,
+            live_log_psi0=live_log_psi0,
+            live_tie_breakers=live_tie_breakers,
+            worst=worst,
+            threshold=threshold,
+            threshold_tie_breaker=threshold_tie_breaker,
+            tie_policy=config.tie_policy,
+            sampler=rwalk_sampler,
+            rng=rng,
+            max_proposals=config.max_proposals_per_replacement,
+            max_likelihood_calls=config.max_likelihood_calls,
+            deadline=deadline,
+        )
+    if config.proposal_scheme == "s-rwalk":
+        if srwalk_sampler is None:
+            raise RuntimeError("s-rwalk controller is not initialized")
+        return draw_srwalk_constrained(
+            evaluator=evaluator,
+            live_theta=live_theta,
+            live_log_likelihood=live_log_likelihood,
+            live_log_prior=live_log_prior,
+            live_log_q0=live_log_q0,
+            live_log_psi0=live_log_psi0,
+            live_tie_breakers=live_tie_breakers,
+            worst=worst,
+            threshold=threshold,
+            threshold_tie_breaker=threshold_tie_breaker,
+            tie_policy=config.tie_policy,
+            sampler=srwalk_sampler,
+            rng=rng,
+            max_proposals=config.max_proposals_per_replacement,
+            max_likelihood_calls=config.max_likelihood_calls,
+            deadline=deadline,
+        )
+    if config.proposal_scheme == "en-rwalk":
+        return draw_ensemble_rwalk_constrained(
+            evaluator=evaluator,
+            live_theta=live_theta,
+            live_log_likelihood=live_log_likelihood,
+            live_log_prior=live_log_prior,
+            live_log_q0=live_log_q0,
+            live_log_psi0=live_log_psi0,
+            live_tie_breakers=live_tie_breakers,
+            worst=worst,
+            threshold=threshold,
+            threshold_tie_breaker=threshold_tie_breaker,
+            tie_policy=config.tie_policy,
+            settings=config.ensemble_rwalk_settings,
+            rng=rng,
+            max_proposals=config.max_proposals_per_replacement,
+            max_likelihood_calls=config.max_likelihood_calls,
+            deadline=deadline,
+        )
+    raise RuntimeError(f"unsupported proposal scheme: {config.proposal_scheme!r}")
+
+
 class MINSampler:
     """Fixed-importance sampler with selectable Morph proposal schemes.
 
@@ -59,6 +172,8 @@ class MINSampler:
     proposal_scheme
         ``"fixed_morph"`` draws from the importance Morph.
         ``"adaptive_morph"`` periodically refits a separate proposal Morph.
+        ``"rwalk"``, ``"s-rwalk"``, and ``"en-rwalk"`` apply constrained
+        Metropolis kernels invariant under the fixed importance density.
     proposal_update_interval
         Completed iterations between adaptive proposal refits.
     n_live
@@ -70,6 +185,12 @@ class MINSampler:
         Independent proposal points evaluated per constrained-rejection batch.
     tie_policy
         ``"strict"`` or lexicographic ``"randomized_plateau"``.
+    rwalk_settings
+        Optional immutable Dynesty-style random-walk settings.
+    srwalk_settings
+        Optional immutable Gaussian-covariance random-walk settings.
+    ensemble_rwalk_settings
+        Optional immutable ensemble random-walk settings.
     """
 
     def __init__(
@@ -83,6 +204,9 @@ class MINSampler:
         rng: int | np.random.Generator,
         proposal_batch_size: int = 64,
         tie_policy: TiePolicy = "strict",
+        rwalk_settings: RWalkSettings | None = None,
+        srwalk_settings: SRWalkSettings | None = None,
+        ensemble_rwalk_settings: EnsembleRWalkSettings | None = None,
     ) -> None:
         if model.ndim != importance_morph.ndim:
             raise ValueError(
@@ -105,13 +229,38 @@ class MINSampler:
         self.rng = _as_generator(rng)
         self.proposal_batch_size = proposal_batch_size
         self.tie_policy = tie_policy
+        self.rwalk_settings = (
+            RWalkSettings() if rwalk_settings is None else rwalk_settings
+        )
+        self.srwalk_settings = (
+            SRWalkSettings() if srwalk_settings is None else srwalk_settings
+        )
+        self.ensemble_rwalk_settings = (
+            EnsembleRWalkSettings()
+            if ensemble_rwalk_settings is None
+            else ensemble_rwalk_settings
+        )
         MINSConfig(
             n_live=n_live,
             proposal_batch_size=proposal_batch_size,
             proposal_scheme=proposal_scheme,
             proposal_update_interval=proposal_update_interval,
             tie_policy=tie_policy,
+            rwalk_settings=self.rwalk_settings,
+            srwalk_settings=self.srwalk_settings,
+            ensemble_rwalk_settings=self.ensemble_rwalk_settings,
         )
+        if proposal_scheme == "rwalk":
+            RWalkSampler(settings=self.rwalk_settings, ndim=model.ndim)
+        if proposal_scheme == "s-rwalk":
+            SRWalkSampler(settings=self.srwalk_settings, ndim=model.ndim)
+
+    @property
+    def citations(self) -> list[tuple[str, str]]:
+        """Return citations declared by the configured sampling method."""
+        if self.proposal_scheme in ("rwalk", "s-rwalk"):
+            return list(RWALK_CITATIONS)
+        return []
 
     @classmethod
     def from_posterior_samples(
@@ -126,6 +275,9 @@ class MINSampler:
         proposal_scheme: ProposalScheme = "fixed_morph",
         proposal_update_interval: int = 25,
         tie_policy: TiePolicy = "strict",
+        rwalk_settings: RWalkSettings | None = None,
+        srwalk_settings: SRWalkSettings | None = None,
+        ensemble_rwalk_settings: EnsembleRWalkSettings | None = None,
     ) -> MINSampler:
         """Fit MorphZ once and construct a sampler.
 
@@ -146,6 +298,9 @@ class MINSampler:
             proposal_scheme=proposal_scheme,
             proposal_update_interval=proposal_update_interval,
             tie_policy=tie_policy,
+            rwalk_settings=rwalk_settings,
+            srwalk_settings=srwalk_settings,
+            ensemble_rwalk_settings=ensemble_rwalk_settings,
         )
 
     def run(
@@ -207,6 +362,9 @@ class MINSampler:
             proposal_batch_size=self.proposal_batch_size,
             proposal_scheme=self.proposal_scheme,
             proposal_update_interval=self.proposal_update_interval,
+            rwalk_settings=self.rwalk_settings,
+            srwalk_settings=self.srwalk_settings,
+            ensemble_rwalk_settings=self.ensemble_rwalk_settings,
             max_iterations=max_iterations,
             max_proposals_per_replacement=max_proposals_per_replacement,
             max_likelihood_calls=max_likelihood_calls,
@@ -227,6 +385,16 @@ class MINSampler:
         evaluator = BatchEvaluator(self.model, self.importance_morph)
         self.proposal_morph = self.importance_morph
         self.adaptive_proposal_controller = None
+        rwalk_sampler = (
+            RWalkSampler(settings=config.rwalk_settings, ndim=self.model.ndim)
+            if config.proposal_scheme == "rwalk"
+            else None
+        )
+        srwalk_sampler = (
+            SRWalkSampler(settings=config.srwalk_settings, ndim=self.model.ndim)
+            if config.proposal_scheme == "s-rwalk"
+            else None
+        )
         if config.proposal_scheme == "adaptive_morph":
             # Constructor validation establishes this runtime protocol.
             if not isinstance(self.importance_morph, RefittableProposal):
@@ -283,6 +451,11 @@ class MINSampler:
         history_proposals: list[int] = []
         history_likelihood_calls: list[int] = []
         history_acceptance: list[float] = []
+        history_mh_acceptance: list[float] = []
+        history_constraint_pass: list[float] = []
+        history_mcmc_accepted: list[int] = []
+        history_mcmc_moved: list[int] = []
+        history_mcmc_completed: list[int] = []
         history_elapsed: list[float] = []
         history_proposal_revision: list[int] = []
         history_proposal_update_attempts: list[int] = []
@@ -324,17 +497,23 @@ class MINSampler:
             threshold = float(live_log_psi0[worst])
             threshold_tie = float(live_tie_breakers[worst])
             try:
-                attempt = draw_constrained(
+                attempt = _draw_replacement(
+                    config=config,
                     evaluator=evaluator,
                     proposal_morph=self.proposal_morph,
+                    live_theta=live_theta,
+                    live_log_likelihood=live_log_likelihood,
+                    live_log_prior=live_log_prior,
+                    live_log_q0=live_log_q0,
+                    live_log_psi0=live_log_psi0,
+                    live_tie_breakers=live_tie_breakers,
+                    worst=worst,
                     threshold=threshold,
                     threshold_tie_breaker=threshold_tie,
-                    tie_policy=config.tie_policy,
                     rng=self.rng,
-                    batch_size=config.proposal_batch_size,
-                    max_proposals=config.max_proposals_per_replacement,
-                    max_likelihood_calls=config.max_likelihood_calls,
                     deadline=deadline,
+                    rwalk_sampler=rwalk_sampler,
+                    srwalk_sampler=srwalk_sampler,
                 )
             except BaseException:
                 progress_reporter.close("error")
@@ -428,6 +607,18 @@ class MINSampler:
             history_proposals.append(attempt.n_proposed)
             history_likelihood_calls.append(evaluator.n_likelihood_calls)
             history_acceptance.append(niter / n_proposals)
+            if config.proposal_scheme in ("rwalk", "s-rwalk", "en-rwalk"):
+                history_mh_acceptance.append(attempt.n_accepted / attempt.n_proposed)
+                history_constraint_pass.append(attempt.n_valid / attempt.n_proposed)
+                history_mcmc_accepted.append(attempt.n_accepted)
+                history_mcmc_moved.append(attempt.n_moved)
+                history_mcmc_completed.append(attempt.n_completed)
+            else:
+                history_mh_acceptance.append(float("nan"))
+                history_constraint_pass.append(float("nan"))
+                history_mcmc_accepted.append(0)
+                history_mcmc_moved.append(0)
+                history_mcmc_completed.append(0)
             history_elapsed.append(elapsed)
             if self.adaptive_proposal_controller is None:
                 proposal_revision = 0
@@ -474,6 +665,11 @@ class MINSampler:
                 "proposal_revision": proposal_revision,
                 "proposal_update_attempts": proposal_update_attempts,
                 "proposal_update_failures": proposal_update_failures,
+                "mh_acceptance_fraction": history_mh_acceptance[-1],
+                "constraint_pass_fraction": history_constraint_pass[-1],
+                "mcmc_accepted": history_mcmc_accepted[-1],
+                "mcmc_moved": history_mcmc_moved[-1],
+                "mcmc_completed": history_mcmc_completed[-1],
             }
             if config.dlogz is not None:
                 progress_info["stopping_tolerance"] = config.dlogz
@@ -519,6 +715,11 @@ class MINSampler:
             proposals=np.asarray(history_proposals, dtype=np.int64),
             likelihood_calls=np.asarray(history_likelihood_calls, dtype=np.int64),
             acceptance_fraction=np.asarray(history_acceptance),
+            mh_acceptance_fraction=np.asarray(history_mh_acceptance),
+            constraint_pass_fraction=np.asarray(history_constraint_pass),
+            mcmc_accepted=np.asarray(history_mcmc_accepted, dtype=np.int64),
+            mcmc_moved=np.asarray(history_mcmc_moved, dtype=np.int64),
+            mcmc_completed=np.asarray(history_mcmc_completed, dtype=np.int64),
             elapsed_seconds=np.asarray(history_elapsed),
             proposal_revision=np.asarray(history_proposal_revision, dtype=np.int64),
             proposal_update_attempts=np.asarray(

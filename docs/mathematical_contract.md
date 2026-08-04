@@ -74,6 +74,50 @@ There is no Metropolis-Hastings or rejection-ratio correction. Consequently,
 the deterministic \(q_0\)-volume quadrature below is heuristic in adaptive
 mode and its evidence estimate may be biased.
 
+The `"rwalk"`, `"s-rwalk"`, and `"en-rwalk"` schemes instead apply Markov
+kernels whose invariant replacement density is
+
+\[
+p_\lambda(\theta)\propto
+q_0(\theta)\,\mathbf 1[\log\Psi_0(\theta)>\lambda].
+\]
+
+The point discarded at the current iteration defines \(\lambda\), but under
+strict ordering it satisfies equality and is outside this support. MCMC states
+are initialized uniformly from eligible surviving live points. For
+`randomized_plateau`, the state is augmented with \(t\sim U(0,1)\), the
+constraint compares \((\log\Psi_0,t)\) lexicographically with the discarded
+pair, and every parameter proposal receives a fresh proposed tie breaker.
+Rejected transitions retain both the parameter and its current tie breaker.
+
+All three kernels use symmetric parameter-space proposals. A proposal that fails
+the augmented pseudo-likelihood constraint is rejected. One that passes uses
+
+\[
+\log\alpha
+=\min\left(0,\log q_0(\theta')-\log q_0(\theta)\right).
+\]
+
+The prior, likelihood, and pseudo-likelihood do not replace this density ratio;
+they determine the constraint through \(\Psi_0\). The `log_q0` values always
+come from the original fixed importance Morph.
+
+`"rwalk"` uses a Dynesty-style uniform-ball random walk transformed by a
+single ellipsoid bounding the complete live set. Its scale adapts to a target
+acceptance fraction, while the ellipsoid is cached between bound updates.
+`"s-rwalk"` uses a Gaussian random walk transformed by a regularized survivor
+covariance that is frozen for a complete replacement. Its scale also adapts to
+a target acceptance fraction between replacements.
+`"en-rwalk"` uses ordered differential-evolution reference pairs from a frozen
+complementary half, nonzero symmetric Gaussian jitter, and sequential
+split-half updates. It selects the replacement uniformly from the complete
+final ensemble. Proposals span physical parameter space and are neither
+clipped nor redrawn at a prior boundary.
+
+These finite-length kernels preserve the constrained density when initialized
+from it, but their output is correlated with the existing live set. Invariance
+does not imply an independent constrained draw or adequate mixing.
+
 ## Evidence estimator
 
 For \(N\) live points and completed discard \(i\), deterministic expected
@@ -177,6 +221,8 @@ stopping policy.
 - Training samples are representative of every material posterior region.
 - Fixed rejection or heuristic adaptive draws are practical at the requested
   final constraint.
+- MCMC walk lengths, ensemble size, and live count have been calibrated with
+  repeated runs; low acceptance or unchanged walkers can indicate poor mixing.
 - Adaptive threshold-only draws do not preserve constrained \(q_0\), so their
   evidence and posterior-weight interpretation is approximate.
 - Deterministic shrinkage and \(\sqrt{H/N}\) do not account for all Monte Carlo

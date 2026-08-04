@@ -11,6 +11,15 @@ All notable changes to this project are documented here.
 - Added fixed and periodically refitted live-set Morph proposal schemes.
 - Renamed stored density and pseudo-likelihood arrays to explicit `log_q0` and
   `log_psi0` forms and added proposal-update diagnostics.
+- Added constrained fixed-`q0` Metropolis `"rwalk"` and split
+  differential-evolution `"en-rwalk"` replacement schemes, immutable settings,
+  resource accounting, and separate MCMC diagnostics.
+- Adapted standard `"rwalk"` to Dynesty 3.1.0 ellipsoidal-ball proposals,
+  `ndim + 20` default walks, acceptance-target scale tuning, cached
+  single-ellipsoid bounds, and Skilling citation reporting.
+- Added a separate statistically specified Gaussian-covariance `"s-rwalk"`
+  kernel with fixed-per-replacement survivor geometry, exact fixed-`q0` MH
+  correction, and acceptance-target scale adaptation.
 
 ## 0.1.0.dev3 - 2026-07-25
 

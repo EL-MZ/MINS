@@ -2,8 +2,8 @@ include CHANGELOG.md
 include CITATION.cff
 include CONTRIBUTING.md
 include MINS_PHASE_2_MORPH_NESTED_SAMPLING.md
+include NOTICE
 recursive-include benchmarks *.py
-recursive-include docs *.md *.png
+recursive-include docs *.md *.png *.tex
 recursive-include examples *.py
 recursive-include tests *.py
-

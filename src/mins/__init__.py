@@ -1,7 +1,13 @@
 """Public Phase 2 interface for MINS."""
 
 from ._version import __version__
-from .config import MINSConfig, ProposalScheme
+from .config import (
+    EnsembleRWalkSettings,
+    MINSConfig,
+    ProposalScheme,
+    RWalkSettings,
+    SRWalkSettings,
+)
 from .exceptions import (
     ConfigurationError,
     InvalidModelOutput,
@@ -12,6 +18,7 @@ from .exceptions import (
     ProposalSupportError,
 )
 from .model import CallableModel, Model
+from .plotting import plot_nested_progress
 from .proposals import MorphMetadata, MorphProposal, Proposal, RefittableProposal
 from .results import MINSResult, ProposalUpdateRecord, RunHistory
 from .sampler import MINSampler
@@ -20,6 +27,7 @@ from .stopping import StoppingCriterionConfig, StoppingPolicy
 __all__ = [
     "CallableModel",
     "ConfigurationError",
+    "EnsembleRWalkSettings",
     "InvalidModelOutput",
     "InvalidProposalOutput",
     "MINSConfig",
@@ -35,9 +43,12 @@ __all__ = [
     "ProposalScheme",
     "ProposalSupportError",
     "ProposalUpdateRecord",
+    "RWalkSettings",
     "RefittableProposal",
     "RunHistory",
+    "SRWalkSettings",
     "StoppingCriterionConfig",
     "StoppingPolicy",
     "__version__",
+    "plot_nested_progress",
 ]

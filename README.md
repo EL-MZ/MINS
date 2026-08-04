@@ -38,8 +38,11 @@ import numpy as np
 
 from mins import (
     CallableModel,
+    EnsembleRWalkSettings,
     MINSampler,
     MorphProposal,
+    RWalkSettings,
+    SRWalkSettings,
     StoppingCriterionConfig,
     StoppingPolicy,
 )
@@ -115,6 +118,57 @@ after the `log_psi0` constraint, so this mode is a heuristic: it does not in
 general draw from the constrained importance Morph and its `logZ` may be
 biased.
 
+Three constrained Metropolis replacement schemes preserve the fixed importance
+target \(q_0\) without an external MCMC dependency:
+
+```python
+rwalk_sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="rwalk",
+    rwalk_settings=RWalkSettings(walks=50, facc=0.5),
+    n_live=200,
+    rng=42,
+)
+
+statistical_rwalk_sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="s-rwalk",
+    srwalk_settings=SRWalkSettings(n_steps=50, facc=0.5),
+    n_live=200,
+    rng=42,
+)
+
+ensemble_sampler = MINSampler(
+    model=model,
+    importance_morph=importance_morph,
+    proposal_scheme="en-rwalk",
+    ensemble_rwalk_settings=EnsembleRWalkSettings(
+        n_walkers=8,
+        n_sweeps=6,
+    ),
+    n_live=200,
+    rng=42,
+)
+```
+
+All three start from eligible surviving live points, never the discarded threshold
+point. Symmetric proposals above the pseudo-likelihood constraint are accepted
+with
+`min(1, exp(proposed.log_q0 - current.log_q0))`. Finite walk length preserves
+the constrained target but does not make the replacement independent or
+guarantee adequate mixing. Calibrate walk lengths and live-set size with
+repeated runs; low MH acceptance and unchanged ensemble walkers are mixing
+warnings, not reasons to condition output on movement. See
+[MCMC replacements](docs/mcmc_replacements.md).
+
+When `walks` is omitted, standard `rwalk` uses `model.ndim + 20`, matching
+Dynesty's top-level default. It starts at scale 1 and adapts toward `facc`.
+`s-rwalk` uses a Gaussian proposal transformed by a regularized covariance of
+the current survivors. Its default scale is `2.38 / sqrt(model.ndim)` and is
+adapted toward `facc` after every completed replacement.
+
 The terminal live display reports iteration, live-point count, likelihood
 calls, proposal efficiency, `logZ`, theoretical `logZerr`, and the stopping
 streak without treating the hard iteration limit as a convergence percentage.
@@ -131,6 +185,7 @@ The normalized prior, Morph target transformation, evidence quadrature, and
 stopping semantics are defined in
 [the mathematical contract](docs/mathematical_contract.md). See the
 [API guide](docs/api.md), [stopping guide](docs/stopping.md), and
+[MCMC replacement guide](docs/mcmc_replacements.md), and
 [Phase 2 tutorial](docs/tutorial.md) before using the estimator.
 
 ## Development

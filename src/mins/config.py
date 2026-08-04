@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from numbers import Real
+from dataclasses import dataclass, field
+from numbers import Integral, Real
 from typing import Literal
 
 import numpy as np
@@ -16,7 +16,169 @@ from .stopping import (
 )
 
 TiePolicy = Literal["strict", "randomized_plateau"]
-ProposalScheme = Literal["fixed_morph", "adaptive_morph"]
+ProposalScheme = Literal[
+    "fixed_morph",
+    "adaptive_morph",
+    "rwalk",
+    "s-rwalk",
+    "en-rwalk",
+]
+
+
+def _positive_integer(value: object, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+        raise ConfigurationError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _positive_finite(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ConfigurationError(f"{name} must be positive and finite")
+    number = float(value)
+    if not np.isfinite(number) or number <= 0.0:
+        raise ConfigurationError(f"{name} must be positive and finite")
+    return number
+
+
+def _finite(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ConfigurationError(f"{name} must be finite")
+    number = float(value)
+    if not np.isfinite(number):
+        raise ConfigurationError(f"{name} must be finite")
+    return number
+
+
+def _shrinkage(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ConfigurationError(f"{name} must be finite and in [0, 1]")
+    number = float(value)
+    if not np.isfinite(number) or not 0.0 <= number <= 1.0:
+        raise ConfigurationError(f"{name} must be finite and in [0, 1]")
+    return number
+
+
+@dataclass(frozen=True, slots=True)
+class RWalkSettings:
+    """Dynesty-style settings for the constrained ``q0`` random walk."""
+
+    walks: int | None = None
+    facc: float = 0.5
+    ncdim: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.walks is not None:
+            object.__setattr__(
+                self,
+                "walks",
+                max(2, _positive_integer(self.walks, name="rwalk walks")),
+            )
+        object.__setattr__(self, "facc", _finite(self.facc, name="rwalk facc"))
+        if self.ncdim is not None:
+            object.__setattr__(
+                self,
+                "ncdim",
+                _positive_integer(self.ncdim, name="rwalk ncdim"),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SRWalkSettings:
+    """Settings for the Gaussian-covariance constrained ``q0`` random walk."""
+
+    n_steps: int = 25
+    scale: float | None = None
+    facc: float = 0.5
+    covariance_shrinkage: float = 0.1
+    covariance_jitter: float = 1.0e-10
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "n_steps",
+            _positive_integer(self.n_steps, name="s-rwalk n_steps"),
+        )
+        if self.scale is not None:
+            object.__setattr__(
+                self,
+                "scale",
+                _positive_finite(self.scale, name="s-rwalk scale"),
+            )
+        object.__setattr__(self, "facc", _finite(self.facc, name="s-rwalk facc"))
+        object.__setattr__(
+            self,
+            "covariance_shrinkage",
+            _shrinkage(
+                self.covariance_shrinkage,
+                name="s-rwalk covariance_shrinkage",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "covariance_jitter",
+            _positive_finite(
+                self.covariance_jitter,
+                name="s-rwalk covariance_jitter",
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EnsembleRWalkSettings:
+    """Settings for split differential-evolution constrained MH."""
+
+    n_walkers: int = 8
+    n_sweeps: int = 4
+    gamma: float | None = None
+    jitter_scale: float = 1.0e-6
+    covariance_shrinkage: float = 0.1
+    covariance_jitter: float = 1.0e-10
+
+    def __post_init__(self) -> None:
+        n_walkers = _positive_integer(
+            self.n_walkers,
+            name="ensemble rwalk n_walkers",
+        )
+        if n_walkers < 4 or n_walkers % 2:
+            raise ConfigurationError(
+                "ensemble rwalk n_walkers must be an even integer >= 4"
+            )
+        object.__setattr__(self, "n_walkers", n_walkers)
+        object.__setattr__(
+            self,
+            "n_sweeps",
+            _positive_integer(self.n_sweeps, name="ensemble rwalk n_sweeps"),
+        )
+        if self.gamma is not None:
+            object.__setattr__(
+                self,
+                "gamma",
+                _positive_finite(self.gamma, name="ensemble rwalk gamma"),
+            )
+        object.__setattr__(
+            self,
+            "jitter_scale",
+            _positive_finite(
+                self.jitter_scale,
+                name="ensemble rwalk jitter_scale",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "covariance_shrinkage",
+            _shrinkage(
+                self.covariance_shrinkage,
+                name="ensemble rwalk covariance_shrinkage",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "covariance_jitter",
+            _positive_finite(
+                self.covariance_jitter,
+                name="ensemble rwalk covariance_jitter",
+            ),
+        )
 
 
 def _validate_dlogz(value: object) -> float:
@@ -45,10 +207,16 @@ class MINSConfig:
     proposal_batch_size
         Number of independent Morph draws evaluated per rejection batch.
     proposal_scheme
-        Fixed importance-Morph rejection or periodically refitted Morph
-        proposals.
+        Fixed/adaptive Morph rejection or one of the constrained fixed-``q0``
+        Metropolis replacement kernels.
     proposal_update_interval
         Completed-iteration interval between adaptive Morph refit attempts.
+    rwalk_settings
+        Dynesty-style random-walk Metropolis settings.
+    srwalk_settings
+        Gaussian-covariance random-walk Metropolis settings.
+    ensemble_rwalk_settings
+        Split differential-evolution ensemble Metropolis settings.
     max_iterations
         Maximum number of completed dead-point replacements.
     max_proposals_per_replacement
@@ -67,6 +235,11 @@ class MINSConfig:
     proposal_batch_size: int = 64
     proposal_scheme: ProposalScheme = "fixed_morph"
     proposal_update_interval: int = 25
+    rwalk_settings: RWalkSettings = field(default_factory=RWalkSettings)
+    srwalk_settings: SRWalkSettings = field(default_factory=SRWalkSettings)
+    ensemble_rwalk_settings: EnsembleRWalkSettings = field(
+        default_factory=EnsembleRWalkSettings
+    )
     max_iterations: int = 10_000
     max_proposals_per_replacement: int = 100_000
     max_likelihood_calls: int | None = None
@@ -113,10 +286,32 @@ class MINSConfig:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ConfigurationError(f"{name} must be a positive integer")
-        if self.proposal_scheme not in ("fixed_morph", "adaptive_morph"):
+        if self.proposal_scheme not in (
+            "fixed_morph",
+            "adaptive_morph",
+            "rwalk",
+            "s-rwalk",
+            "en-rwalk",
+        ):
             raise ConfigurationError(
                 f"unsupported proposal_scheme: {self.proposal_scheme!r}"
             )
+        if not isinstance(self.rwalk_settings, RWalkSettings):
+            raise ConfigurationError("rwalk_settings must be an RWalkSettings")
+        if not isinstance(self.srwalk_settings, SRWalkSettings):
+            raise ConfigurationError("srwalk_settings must be an SRWalkSettings")
+        if not isinstance(
+            self.ensemble_rwalk_settings,
+            EnsembleRWalkSettings,
+        ):
+            raise ConfigurationError(
+                "ensemble_rwalk_settings must be an EnsembleRWalkSettings"
+            )
+        if (
+            self.proposal_scheme == "en-rwalk"
+            and self.ensemble_rwalk_settings.n_walkers > self.n_live - 1
+        ):
+            raise ConfigurationError("ensemble rwalk n_walkers must be <= n_live - 1")
         if self.max_likelihood_calls is not None and (
             isinstance(self.max_likelihood_calls, bool)
             or not isinstance(self.max_likelihood_calls, int)

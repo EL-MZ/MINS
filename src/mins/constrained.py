@@ -58,6 +58,38 @@ class ConstrainedAttempt:
     reason: str | None
     n_proposed: int
     n_valid: int
+    n_accepted: int = 0
+    n_moved: int = 0
+    n_completed: int = 0
+
+
+def passes_constraint(
+    log_psi0: NDArray[np.float64] | float,
+    tie_breaker: NDArray[np.float64] | float,
+    *,
+    threshold: float,
+    threshold_tie_breaker: float,
+    tie_policy: TiePolicy,
+) -> NDArray[np.bool_] | bool:
+    """Apply the strict or lexicographic randomized-plateau ordering.
+
+    Under ``randomized_plateau``, the tie breaker is part of the augmented
+    state and equal-pseudo-likelihood points pass only when their tie breaker
+    exceeds the discarded point's tie breaker.
+    """
+    values = np.asarray(log_psi0, dtype=float)
+    ties = np.asarray(tie_breaker, dtype=float)
+    if tie_policy == "strict":
+        result = values > threshold
+    elif tie_policy == "randomized_plateau":
+        result = (values > threshold) | (
+            (values == threshold) & (ties > threshold_tie_breaker)
+        )
+    else:  # pragma: no cover - public configuration validates this
+        raise ValueError(f"unsupported tie_policy: {tie_policy!r}")
+    if result.ndim == 0:
+        return bool(result)
+    return result
 
 
 class BatchEvaluator:
@@ -201,12 +233,16 @@ def draw_constrained(
         )
         batch = evaluator.evaluate(points)
         tie_breakers = rng.random(current_size)
-        if tie_policy == "strict":
-            valid = batch.log_psi0 > threshold
-        else:
-            valid = (batch.log_psi0 > threshold) | (
-                (batch.log_psi0 == threshold) & (tie_breakers > threshold_tie_breaker)
-            )
+        valid = np.asarray(
+            passes_constraint(
+                batch.log_psi0,
+                tie_breakers,
+                threshold=threshold,
+                threshold_tie_breaker=threshold_tie_breaker,
+                tie_policy=tie_policy,
+            ),
+            dtype=bool,
+        )
         valid_indices = np.flatnonzero(valid)
         n_proposed += current_size
         n_valid += len(valid_indices)

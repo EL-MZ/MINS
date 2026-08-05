@@ -64,8 +64,8 @@ class EnsembleMoveWeights:
     """Relative weights for the ``en-rwalk`` proposal mixture."""
 
     de: float = 0.60
-    stretch: float = 0.25
-    gaussian: float = 0.15
+    stretch: float = 0.05
+    gaussian: float = 0.35
 
     def __post_init__(self) -> None:
         values = []
@@ -183,7 +183,7 @@ class EnsembleRWalkSettings:
     covariance_shrinkage: float = 0.1
     covariance_jitter: float = 1.0e-10
     move_weights: EnsembleMoveWeights = field(default_factory=EnsembleMoveWeights)
-    stretch_scale: float = 2.0
+    stretch_scale: float = 1.5
     gaussian_scale: float | None = None
 
     def __post_init__(self) -> None:

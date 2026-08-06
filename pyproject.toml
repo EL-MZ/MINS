@@ -110,3 +110,8 @@ source = ["mins"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+
+[dependency-groups]
+dev = [
+    "dynesty>=3.1.0",
+]

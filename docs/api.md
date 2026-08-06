@@ -21,6 +21,37 @@ log_prior(theta) -> ndarray shape (n,)
 only when both functions accept individual `(ndim,)` rows; the adapter does not
 catch user exceptions to guess vectorization.
 
+For an expensive scalar likelihood, pass a persistent ordered mapper as
+`scalar_likelihood_map`. This is used for likelihood rows only; prior and
+importance-density evaluation remain in the parent process so an `en-rwalk`
+half-ensemble can still use a batched `q0` evaluation:
+
+```python
+from concurrent.futures import ProcessPoolExecutor
+
+# Both callables must be module-level and picklable when using processes.
+with ProcessPoolExecutor(max_workers=4) as pool:
+    model = CallableModel(
+        ndim=ndim,
+        parameter_names=names,
+        log_likelihood_fn=slow_scalar_log_likelihood,
+        log_prior_fn=scalar_log_prior,
+        vectorized=False,
+        scalar_likelihood_map=pool.map,
+    )
+    sampler = MINSampler(
+        model=model,
+        importance_morph=importance_morph,
+        n_live=nlive,
+        rng=seed,
+    )
+    result = sampler.run(dlogz=0.1)
+```
+
+Use this only when each likelihood call is large relative to process-pool
+overhead. A vectorized likelihood is usually faster; pool construction must be
+protected by the usual `if __name__ == "__main__":` guard on spawn platforms.
+
 ## MorphProposal
 
 ```python

@@ -16,6 +16,10 @@ ProgressOption = bool | ProgressCallback | None
 class ProgressReporter(Protocol):
     """Internal interface shared by terminal and callback reporters."""
 
+    @property
+    def is_active(self) -> bool:
+        """Whether the reporter consumes per-iteration update payloads."""
+
     def update(self, info: ProgressInfo) -> None:
         """Consume one completed-iteration progress snapshot."""
 
@@ -24,6 +28,10 @@ class ProgressReporter(Protocol):
 
 
 class _NullProgress:
+    @property
+    def is_active(self) -> bool:
+        return False
+
     def update(self, info: ProgressInfo) -> None:
         del info
 
@@ -34,6 +42,10 @@ class _NullProgress:
 class _CallbackProgress:
     def __init__(self, callback: ProgressCallback) -> None:
         self._callback = callback
+
+    @property
+    def is_active(self) -> bool:
+        return True
 
     def update(self, info: ProgressInfo) -> None:
         self._callback(info)
@@ -58,6 +70,10 @@ class _TqdmProgress:
             mininterval=0.2,
         )
         self._postfix: dict[str, str | int] = {}
+
+    @property
+    def is_active(self) -> bool:
+        return True
 
     def update(self, info: ProgressInfo) -> None:
         iteration = int(info["iteration"])

@@ -204,6 +204,63 @@ class BatchEvaluator:
             log_psi0=log_psi0,
         )
 
+    def evaluate_one(
+        self,
+        theta: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], float, float, float, float]:
+        """Evaluate and validate one ``(ndim,)`` point with minimal overhead."""
+        points = validate_points(theta, self.ndim)
+        if len(points) != 1:
+            raise InvalidModelOutput("evaluate_one requires exactly one point")
+
+        log_likelihood_values = np.asarray(
+            self.model.log_likelihood(points),
+            dtype=float,
+        )
+        self.n_likelihood_calls += 1
+        log_prior_values = np.asarray(self.model.log_prior(points), dtype=float)
+        self.n_prior_calls += 1
+        log_q0_values = np.asarray(self.importance_morph.log_prob(points), dtype=float)
+
+        for name, values, error_type in (
+            ("log_likelihood", log_likelihood_values, InvalidModelOutput),
+            ("log_prior", log_prior_values, InvalidModelOutput),
+            ("log_q0", log_q0_values, InvalidProposalOutput),
+        ):
+            if values.shape != (1,):
+                raise error_type(f"{name} must return shape (1,), got {values.shape}")
+
+        log_likelihood = float(log_likelihood_values[0])
+        log_prior = float(log_prior_values[0])
+        log_q0 = float(log_q0_values[0])
+        for name, value, error_type in (
+            ("log_likelihood", log_likelihood, InvalidModelOutput),
+            ("log_prior", log_prior, InvalidModelOutput),
+            ("log_q0", log_q0, InvalidProposalOutput),
+        ):
+            if np.isnan(value):
+                raise error_type(f"{name} returned NaN")
+            if np.isposinf(value):
+                raise error_type(f"{name} returned +infinity")
+
+        numerator = log_likelihood + log_prior
+        if np.isfinite(numerator) and np.isneginf(log_q0):
+            raise ProposalSupportError(
+                "proposal support failure: finite log_likelihood + log_prior "
+                "with log_q0 == -inf at batch row 0"
+            )
+
+        if np.isfinite(numerator) and np.isfinite(log_q0):
+            log_psi0 = numerator - log_q0
+        else:
+            log_psi0 = -np.inf
+        if np.isnan(log_psi0) or np.isposinf(log_psi0):
+            raise InvalidModelOutput("log_psi0 is NaN or +infinity")
+
+        self.outside_prior += int(np.isneginf(log_prior))
+        self.zero_likelihood += int(np.isneginf(log_likelihood))
+        return points[0], log_likelihood, log_prior, log_q0, log_psi0
+
 
 def validate_proposal_sample(
     theta: NDArray[np.float64],

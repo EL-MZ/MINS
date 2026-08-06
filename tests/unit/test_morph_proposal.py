@@ -68,6 +68,24 @@ def test_morph_adapter_rejects_bad_log_prob_shape() -> None:
         proposal.log_prob(np.zeros((2, 2)))
 
 
+@pytest.mark.parametrize("ndim", [1, 2, 3])
+def test_morph_adapter_batch_log_prob_matches_scalar_backend(ndim: int) -> None:
+    training = np.random.default_rng(60 + ndim).normal(size=(160, ndim))
+    proposal = MorphProposal.fit(
+        training,
+        groups=[],
+        param_names=tuple(f"x{index}" for index in range(ndim)),
+    )
+    points = np.random.default_rng(70 + ndim).normal(size=(7, ndim))
+
+    expected = np.asarray(
+        [proposal._backend.logpdf(point) for point in points],
+        dtype=float,
+    )
+
+    np.testing.assert_allclose(proposal.log_prob(points), expected, rtol=1e-12)
+
+
 def test_morph_adapter_computes_tc_and_selects_groups_automatically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

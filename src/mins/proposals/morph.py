@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -53,11 +53,51 @@ class MorphProposal:
         backend: Any,
         metadata: MorphMetadata,
         refit_kwargs: dict[str, Any] | None = None,
+        logpdf_batch_mode: Literal["native", "transposed", "scalar"] = "scalar",
     ) -> None:
         self._backend = backend
         self.metadata = metadata
         self.ndim = metadata.ndim
         self._refit_kwargs = deepcopy(refit_kwargs)
+        self._logpdf_batch_mode = logpdf_batch_mode
+
+    @staticmethod
+    def _resolve_logpdf_batch_mode(
+        backend: Any,
+        samples: NDArray[np.float64],
+    ) -> Literal["native", "transposed", "scalar"]:
+        """Find a verified batch convention without trusting backend docs.
+
+        MorphZ 0.4.1 accepts batches only after a transpose despite documenting
+        the opposite orientation.  Probe both conventions against scalar
+        values at fit time so a future backend can use its native convention
+        and an unknown backend safely falls back to row-wise evaluation.
+        """
+        n_probe = 2 if samples.shape[1] != 2 else 3
+        probe = np.array(
+            [samples[index % len(samples)] for index in range(n_probe)],
+            dtype=float,
+        )
+        expected = np.asarray(
+            [backend.logpdf(point) for point in probe],
+            dtype=float,
+        )
+        for mode, value in (
+            ("native", probe),
+            ("transposed", probe.T),
+        ):
+            try:
+                result = np.asarray(backend.logpdf(value), dtype=float)
+            except (TypeError, ValueError):
+                continue
+            if result.shape == expected.shape and np.allclose(
+                result,
+                expected,
+                rtol=1.0e-12,
+                atol=1.0e-12,
+            ):
+                return mode
+        return "scalar"
 
     @classmethod
     def fit(
@@ -227,7 +267,12 @@ class MorphProposal:
             "min_tc": min_tc,
             "top_k_greedy": top_k_greedy,
         }
-        return cls(backend, metadata, refit_kwargs)
+        return cls(
+            backend,
+            metadata,
+            refit_kwargs,
+            cls._resolve_logpdf_batch_mode(backend, samples),
+        )
 
     def refit(
         self,
@@ -280,9 +325,9 @@ class MorphProposal:
     ) -> NDArray[np.float64]:
         """Evaluate the normalized fitted MorphZ log density.
 
-        MorphZ 0.4.1's public ``logpdf`` supports single points reliably. The
-        adapter evaluates rows individually to preserve the MINS ``(n, ndim)``
-        convention without guessing a different batch orientation.
+        The adapter probes the backend's batch orientation when fitting and
+        uses it only after verifying agreement with scalar values.  Unknown
+        backends retain the conservative row-wise fallback.
         """
         points = np.asarray(theta, dtype=float)
         if points.ndim == 1:
@@ -293,10 +338,15 @@ class MorphProposal:
             )
         if not np.all(np.isfinite(points)):
             raise InvalidProposalOutput("theta contains NaN or infinity")
-        values = np.asarray(
-            [self._backend.logpdf(point) for point in points],
-            dtype=float,
-        )
+        if self._logpdf_batch_mode == "native":
+            values = np.asarray(self._backend.logpdf(points), dtype=float)
+        elif self._logpdf_batch_mode == "transposed":
+            values = np.asarray(self._backend.logpdf(points.T), dtype=float)
+        else:
+            values = np.asarray(
+                [self._backend.logpdf(point) for point in points],
+                dtype=float,
+            )
         if values.shape != (len(points),):
             raise InvalidProposalOutput(
                 f"MorphZ logpdf returned {values.shape}, expected {(len(points),)}"

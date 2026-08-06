@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -27,6 +27,10 @@ class Model(Protocol):
 
 
 LogDensityCallable = Callable[[NDArray[np.float64]], ArrayLike]
+ScalarLikelihoodMap = Callable[
+    [LogDensityCallable, NDArray[np.float64]],
+    Iterable[ArrayLike],
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +48,12 @@ class CallableModel:
         ``(n, ndim)`` array. Scalar callables receive one ``(ndim,)`` row.
     vectorized
         Whether both callables accept batches.
+    scalar_likelihood_map
+        Optional ordered mapper used only when ``vectorized=False`` for
+        likelihood evaluations.  It receives the scalar likelihood callable
+        and an ``(n, ndim)`` array, and must yield one result per input row in
+        the same order.  A persistent process-pool ``map`` method can be
+        supplied for expensive, picklable likelihoods; priors remain local.
 
     Notes
     -----
@@ -55,6 +65,7 @@ class CallableModel:
     log_likelihood_fn: LogDensityCallable
     log_prior_fn: LogDensityCallable
     vectorized: bool = True
+    scalar_likelihood_map: ScalarLikelihoodMap | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.ndim, bool) or self.ndim < 1:
@@ -69,12 +80,15 @@ class CallableModel:
         function: LogDensityCallable,
         theta: NDArray[np.float64],
         name: str,
+        scalar_map: ScalarLikelihoodMap | None = None,
     ) -> NDArray[np.float64]:
         points = validate_points(theta, self.ndim)
         if self.vectorized:
             values = np.asarray(function(points), dtype=float)
-        else:
+        elif scalar_map is None:
             values = np.asarray([function(row) for row in points], dtype=float)
+        else:
+            values = np.asarray(list(scalar_map(function, points)), dtype=float)
         if values.shape == () and len(points) == 1:
             values = values.reshape(1)
         if values.shape != (len(points),):
@@ -85,7 +99,12 @@ class CallableModel:
 
     def log_likelihood(self, theta: NDArray[np.float64]) -> NDArray[np.float64]:
         """Return log-likelihood values with shape ``(n,)``."""
-        return self._evaluate(self.log_likelihood_fn, theta, "log_likelihood")
+        return self._evaluate(
+            self.log_likelihood_fn,
+            theta,
+            "log_likelihood",
+            self.scalar_likelihood_map,
+        )
 
     def log_prior(self, theta: NDArray[np.float64]) -> NDArray[np.float64]:
         """Return normalized log-prior values with shape ``(n,)``."""

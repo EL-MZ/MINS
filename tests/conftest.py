@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Generator
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,27 @@ OUTDIR = HERE / "test_out"
 def _sanitize_nodeid(nodeid: str) -> str:
     """Create a filesystem-safe name from a pytest node id."""
     return re.sub(r"[^A-Za-z0-9._-]+", "_", nodeid).strip("_")
+
+
+def _prune_empty_artifacts(root: Path) -> None:
+    """Remove empty test logs and empty directories under the artifact root."""
+    if not root.exists():
+        return
+
+    for log_file in root.rglob("test.log"):
+        if log_file.is_file() and log_file.stat().st_size == 0:
+            log_file.unlink()
+
+    directories = sorted(
+        (path for path in root.rglob("*") if path.is_dir()),
+        reverse=True,
+    )
+    for directory in directories:
+        with suppress(OSError):
+            directory.rmdir()
+
+    with suppress(OSError):
+        root.rmdir()
 
 
 @pytest.fixture(scope="session")
@@ -62,3 +84,10 @@ def save_test_logs_and_plots(
 
     if not any(test_outdir.iterdir()):
         test_outdir.rmdir()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def prune_test_artifacts_at_session_end(outdir: Path) -> Generator[None, None, None]:
+    """Prune empty artifacts at the end of the test session."""
+    yield
+    _prune_empty_artifacts(outdir)

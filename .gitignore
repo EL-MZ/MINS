@@ -4,6 +4,8 @@ __pycache__/
 .coverage
 .mypy_cache/
 .pytest_cache/
+
+gaussian_shell_benchmark/
 .ruff_cache/
 .venv/
 build/

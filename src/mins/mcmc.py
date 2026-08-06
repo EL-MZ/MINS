@@ -593,12 +593,18 @@ def draw_rwalk_constrained(
         proposal = current.theta + scale * (
             axes @ _random_unit_ball(evaluator.ndim, rng)
         )
-        batch = evaluator.evaluate(proposal.reshape(1, evaluator.ndim))
+        (
+            proposal_theta,
+            proposal_log_likelihood,
+            proposal_log_prior,
+            proposal_log_q0,
+            proposal_log_psi0,
+        ) = evaluator.evaluate_one(proposal)
         n_proposed += 1
         proposed_tie = float(rng.random())
         valid = bool(
             passes_constraint(
-                float(batch.log_psi0[0]),
+                proposal_log_psi0,
                 proposed_tie,
                 threshold=threshold,
                 threshold_tie_breaker=threshold_tie_breaker,
@@ -610,10 +616,17 @@ def draw_rwalk_constrained(
         n_valid += 1
         if accepts_log_q0_metropolis(
             current_log_q0=current.log_q0,
-            proposed_log_q0=float(batch.log_q0[0]),
+            proposed_log_q0=proposal_log_q0,
             rng=rng,
         ):
-            current = _point_from_batch(batch, 0, proposed_tie)
+            current = EvaluatedPoint(
+                theta=proposal_theta,
+                log_likelihood=proposal_log_likelihood,
+                log_prior=proposal_log_prior,
+                log_q0=proposal_log_q0,
+                log_psi0=proposal_log_psi0,
+                tie_breaker=proposed_tie,
+            )
             n_accepted += 1
             moved = True
     draw = ConstrainedDraw(current, n_proposed, n_valid)
@@ -718,12 +731,18 @@ def draw_srwalk_constrained(
         proposal = current.theta + scale * (
             factor @ rng.standard_normal(evaluator.ndim)
         )
-        batch = evaluator.evaluate(proposal.reshape(1, evaluator.ndim))
+        (
+            proposal_theta,
+            proposal_log_likelihood,
+            proposal_log_prior,
+            proposal_log_q0,
+            proposal_log_psi0,
+        ) = evaluator.evaluate_one(proposal)
         n_proposed += 1
         proposed_tie = float(rng.random())
         valid = bool(
             passes_constraint(
-                float(batch.log_psi0[0]),
+                proposal_log_psi0,
                 proposed_tie,
                 threshold=threshold,
                 threshold_tie_breaker=threshold_tie_breaker,
@@ -735,10 +754,17 @@ def draw_srwalk_constrained(
         n_valid += 1
         if accepts_log_q0_metropolis(
             current_log_q0=current.log_q0,
-            proposed_log_q0=float(batch.log_q0[0]),
+            proposed_log_q0=proposal_log_q0,
             rng=rng,
         ):
-            current = _point_from_batch(batch, 0, proposed_tie)
+            current = EvaluatedPoint(
+                theta=proposal_theta,
+                log_likelihood=proposal_log_likelihood,
+                log_prior=proposal_log_prior,
+                log_q0=proposal_log_q0,
+                log_psi0=proposal_log_psi0,
+                tie_breaker=proposed_tie,
+            )
             n_accepted += 1
             moved = True
     draw = ConstrainedDraw(current, n_proposed, n_valid)

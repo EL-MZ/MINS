@@ -661,46 +661,49 @@ class MINSampler:
             history_proposal_update_attempts.append(proposal_update_attempts)
             history_proposal_update_failures.append(proposal_update_failures)
 
-            progress_info: dict[str, float | int] = {
-                "iteration": niter,
-                "max_iterations": config.max_iterations,
-                "nlive": config.n_live,
-                "likelihood_calls": evaluator.n_likelihood_calls,
-                "proposals": n_proposals,
-                "proposals_iteration": attempt.n_proposed,
-                "efficiency_percent": 100.0 * niter / n_proposals,
-                "logz": logz_total,
-                "logzerr": logzerr,
-                "information": information,
-                "logz_dead": logz_dead,
-                "logz_live": logz_live,
-                "remaining_fraction": stopping_metrics.remaining_fraction,
-                "remaining_dlogz": stopping_metrics.remaining_dlogz,
-                "live_ess": stopping_metrics.live_ess,
-                "live_mean_rse": stopping_metrics.live_mean_rse,
-                "live_logz_error": stopping_metrics.live_logz_error,
-                "logz_stability": stopping_metrics.logz_stability,
-                "stopping_streak": stopping_streak,
-                "stopping_consecutive": stopping_policy.consecutive,
-                "threshold": threshold,
-                "live_min_log_psi": history_live_min[-1],
-                "live_median_log_psi": history_live_median[-1],
-                "live_max_log_psi": history_live_max[-1],
-                "elapsed_seconds": elapsed,
-                "proposal_revision": proposal_revision,
-                "proposal_update_attempts": proposal_update_attempts,
-                "proposal_update_failures": proposal_update_failures,
-                "mh_acceptance_fraction": history_mh_acceptance[-1],
-                "constraint_pass_fraction": history_constraint_pass[-1],
-                "mcmc_accepted": history_mcmc_accepted[-1],
-                "mcmc_moved": history_mcmc_moved[-1],
-                "mcmc_completed": history_mcmc_completed[-1],
-            }
-            if config.dlogz is not None:
-                progress_info["stopping_tolerance"] = config.dlogz
-            for evaluation in stopping_decision.evaluations:
-                progress_info[f"criterion_{evaluation.name}_met"] = int(evaluation.met)
-            progress_reporter.update(progress_info)
+            if progress_reporter.is_active:
+                progress_info: dict[str, float | int] = {
+                    "iteration": niter,
+                    "max_iterations": config.max_iterations,
+                    "nlive": config.n_live,
+                    "likelihood_calls": evaluator.n_likelihood_calls,
+                    "proposals": n_proposals,
+                    "proposals_iteration": attempt.n_proposed,
+                    "efficiency_percent": 100.0 * niter / n_proposals,
+                    "logz": logz_total,
+                    "logzerr": logzerr,
+                    "information": information,
+                    "logz_dead": logz_dead,
+                    "logz_live": logz_live,
+                    "remaining_fraction": stopping_metrics.remaining_fraction,
+                    "remaining_dlogz": stopping_metrics.remaining_dlogz,
+                    "live_ess": stopping_metrics.live_ess,
+                    "live_mean_rse": stopping_metrics.live_mean_rse,
+                    "live_logz_error": stopping_metrics.live_logz_error,
+                    "logz_stability": stopping_metrics.logz_stability,
+                    "stopping_streak": stopping_streak,
+                    "stopping_consecutive": stopping_policy.consecutive,
+                    "threshold": threshold,
+                    "live_min_log_psi": history_live_min[-1],
+                    "live_median_log_psi": history_live_median[-1],
+                    "live_max_log_psi": history_live_max[-1],
+                    "elapsed_seconds": elapsed,
+                    "proposal_revision": proposal_revision,
+                    "proposal_update_attempts": proposal_update_attempts,
+                    "proposal_update_failures": proposal_update_failures,
+                    "mh_acceptance_fraction": history_mh_acceptance[-1],
+                    "constraint_pass_fraction": history_constraint_pass[-1],
+                    "mcmc_accepted": history_mcmc_accepted[-1],
+                    "mcmc_moved": history_mcmc_moved[-1],
+                    "mcmc_completed": history_mcmc_completed[-1],
+                }
+                if config.dlogz is not None:
+                    progress_info["stopping_tolerance"] = config.dlogz
+                for evaluation in stopping_decision.evaluations:
+                    progress_info[f"criterion_{evaluation.name}_met"] = int(
+                        evaluation.met
+                    )
+                progress_reporter.update(progress_info)
             if stopping_decision.should_stop:
                 termination_reason = (
                     "remaining_evidence"

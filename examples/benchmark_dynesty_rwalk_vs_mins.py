@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import platform
@@ -83,7 +84,6 @@ from typing import Any
 
 import numpy as np
 from scipy.special import logsumexp
-
 
 RAW_FIELDS = [
     "method",
@@ -167,11 +167,18 @@ class TwinGaussianShell:
         self._log_shell_norm = -0.5 * np.log(2.0 * np.pi * self.shell_width**2)
         self._log_prior_density = -self.ndim * np.log(2.0 * self.prior_half_width)
 
-    def log_likelihood(self, theta: np.ndarray) -> float:
-        """Scalar log likelihood used by Dynesty and CallableModel."""
+    def log_likelihood(self, theta: np.ndarray) -> float | np.ndarray:
+        """Log likelihood for one point or a batch shaped ``(n, ndim)``."""
         point = np.asarray(theta, dtype=float)
-        radius_1 = np.linalg.norm(point - self.center_1)
-        radius_2 = np.linalg.norm(point - self.center_2)
+        single_point = point.ndim == 1
+        if single_point:
+            point = point.reshape(1, -1)
+        if point.ndim != 2 or point.shape[1] != self.ndim:
+            raise ValueError(
+                f"theta must have shape ({self.ndim},) or (n, {self.ndim})"
+            )
+        radius_1 = np.linalg.norm(point - self.center_1, axis=1)
+        radius_2 = np.linalg.norm(point - self.center_2, axis=1)
         component_1 = (
             self._log_shell_norm
             - 0.5 * ((radius_1 - self.shell_radius) / self.shell_width) ** 2
@@ -180,14 +187,25 @@ class TwinGaussianShell:
             self._log_shell_norm
             - 0.5 * ((radius_2 - self.shell_radius) / self.shell_width) ** 2
         )
-        return float(logsumexp((component_1, component_2)))
+        values = np.asarray(logsumexp((component_1, component_2), axis=0), dtype=float)
+        return float(values[0]) if single_point else values
 
-    def log_prior(self, theta: np.ndarray) -> float:
-        """Normalized scalar log prior on [-L, L]^D."""
+    def log_prior(self, theta: np.ndarray) -> float | np.ndarray:
+        """Normalized log prior for one point or a batch on [-L, L]^D."""
         point = np.asarray(theta, dtype=float)
-        if np.all(np.abs(point) <= self.prior_half_width):
-            return float(self._log_prior_density)
-        return -np.inf
+        single_point = point.ndim == 1
+        if single_point:
+            point = point.reshape(1, -1)
+        if point.ndim != 2 or point.shape[1] != self.ndim:
+            raise ValueError(
+                f"theta must have shape ({self.ndim},) or (n, {self.ndim})"
+            )
+        values = np.where(
+            np.all(np.abs(point) <= self.prior_half_width, axis=1),
+            self._log_prior_density,
+            -np.inf,
+        )
+        return float(values[0]) if single_point else np.asarray(values, dtype=float)
 
     def prior_transform(self, unit_cube: np.ndarray) -> np.ndarray:
         """Map [0, 1]^D to [-L, L]^D."""
@@ -508,7 +526,7 @@ def build_mins_model(model: TwinGaussianShell) -> Any:
         parameter_names=tuple(f"x{index}" for index in range(model.ndim)),
         log_likelihood_fn=model.log_likelihood,
         log_prior_fn=model.log_prior,
-        vectorized=False,
+        vectorized=True,
     )
 
 
@@ -545,6 +563,7 @@ def run_mins(
     proposal_scheme: str,
     dlogz: float,
     proposal_batch_size: int,
+    tie_policy: str,
     ensemble_walkers: int,
     ensemble_sweeps: int,
     ensemble_de_weight: float,
@@ -575,6 +594,7 @@ def run_mins(
         "n_live": nlive,
         "rng": seed,
         "proposal_batch_size": proposal_batch_size,
+        "tie_policy": tie_policy,
     }
 
     if proposal_scheme == "en-rwalk":
@@ -634,6 +654,7 @@ def summarize_rows(
     repeats: int,
     ncall_metric: str,
     summary_path: Path,
+    requested_nlive: set[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate successful runs by method and n_live."""
     ncall_field = {
@@ -644,12 +665,18 @@ def summarize_rows(
 
     groups: dict[tuple[str, int], list[dict[str, str]]] = {}
     for row in rows.values():
+        nlive = integer_or_zero(row["nlive"])
+        repeat = integer_or_zero(row["repeat"])
+        if requested_nlive is not None and nlive not in requested_nlive:
+            continue
+        if repeat < 0 or repeat >= repeats:
+            continue
         if row.get("status") != "success":
             continue
         logz = finite_float(row.get("logz"))
         if not math.isfinite(logz):
             continue
-        key = (row["method"], integer_or_zero(row["nlive"]))
+        key = (row["method"], nlive)
         groups.setdefault(key, []).append(row)
 
     summaries: list[dict[str, Any]] = []
@@ -946,15 +973,106 @@ def print_summary(summaries: list[dict[str, Any]]) -> None:
     print("-" * 108)
 
 
+def print_incomplete_summary(
+    *,
+    rows: dict[tuple[str, int, int], dict[str, str]],
+    nlive_values: list[int],
+    repeats: int,
+) -> None:
+    """Make excluded partial runs visible in terminal benchmark output."""
+    incomplete: dict[tuple[str, int], list[str]] = {}
+    labels: dict[tuple[str, int], str] = {}
+    for row in rows.values():
+        nlive = integer_or_zero(row["nlive"])
+        repeat = integer_or_zero(row["repeat"])
+        if nlive not in nlive_values or repeat < 0 or repeat >= repeats:
+            continue
+        if row.get("status") == "success":
+            continue
+        key = (row["method"], nlive)
+        labels[key] = row["method_label"]
+        reason = row.get("termination_reason") or row.get("message") or "unknown"
+        incomplete.setdefault(key, []).append(reason)
+    if not incomplete:
+        return
+    print("\nExcluded incomplete/failed runs")
+    for key, reasons in sorted(
+        incomplete.items(),
+        key=lambda item: (item[0][1], METHOD_ORDER.get(item[0][0], 99)),
+    ):
+        counts: dict[str, int] = {}
+        for reason in reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+        rendered_reasons = ", ".join(
+            f"{reason} ({count})" for reason, count in sorted(counts.items())
+        )
+        print(f"  {labels[key]}, nlive={key[1]}: {rendered_reasons}")
+
+
+_PRESENTATION_ARGUMENTS = frozenset(
+    {
+        "output_dir",
+        "overwrite",
+        "plot_only",
+        "progress",
+        "resume",
+        "show",
+        "linear_ncall_axis",
+        "ncall_metric",
+        "nlive",
+        "repeats",
+    }
+)
+
+
+def benchmark_fingerprint(args: argparse.Namespace) -> str:
+    """Return a stable identity for raw samples and training caches.
+
+    Grid and presentation arguments are deliberately omitted so a compatible
+    campaign can add live-point values or repeats without mixing numerical
+    settings from another experiment.
+    """
+    payload = {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in vars(args).items()
+        if key not in _PRESENTATION_ARGUMENTS
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def validate_resume_config(
+    *,
+    output_dir: Path,
+    fingerprint: str,
+) -> None:
+    """Reject a resume that would combine incompatible numerical runs."""
+    config_path = output_dir / "benchmark_config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            "cannot safely resume without benchmark_config.json; use a new "
+            "output directory or --overwrite"
+        )
+    with config_path.open(encoding="utf-8") as stream:
+        previous = json.load(stream)
+    if previous.get("run_fingerprint") != fingerprint:
+        raise ValueError(
+            "benchmark configuration does not match this output directory; "
+            "use a new output directory or --overwrite"
+        )
+
+
 def save_config(
     *,
     args: argparse.Namespace,
     true_logz: float,
     output_dir: Path,
+    fingerprint: str,
 ) -> None:
     config = {
         "created_utc": utc_now(),
         "command": " ".join(sys.argv),
+        "run_fingerprint": fingerprint,
         "true_logz": true_logz,
         "arguments": {
             key: str(value) if isinstance(value, Path) else value
@@ -996,6 +1114,7 @@ def cache_paths(output_dir: Path, nlive: int) -> tuple[Path, Path]:
 def load_training_cache(
     output_dir: Path,
     nlive: int,
+    fingerprint: str,
 ) -> tuple[np.ndarray, dict[str, Any]] | None:
     samples_path, metadata_path = cache_paths(output_dir, nlive)
     if not samples_path.exists() or not metadata_path.exists():
@@ -1004,6 +1123,8 @@ def load_training_cache(
         posterior = np.asarray(data["posterior_samples"], dtype=float)
     with metadata_path.open("r", encoding="utf-8") as stream:
         cache_metadata = json.load(stream)
+    if cache_metadata.get("run_fingerprint") != fingerprint:
+        return None
     return posterior, cache_metadata
 
 
@@ -1013,6 +1134,7 @@ def save_training_cache(
     nlive: int,
     posterior: np.ndarray,
     pilot_row: dict[str, Any],
+    fingerprint: str,
 ) -> None:
     samples_path, metadata_path = cache_paths(output_dir, nlive)
     np.savez_compressed(
@@ -1024,6 +1146,7 @@ def save_training_cache(
             {
                 "nlive": nlive,
                 "created_utc": utc_now(),
+                "run_fingerprint": fingerprint,
                 "pilot_row": normalize_row(pilot_row),
                 "posterior_shape": list(posterior.shape),
             },
@@ -1057,11 +1180,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--training-thin must be at least one")
     if args.max_training_samples < 0:
         raise ValueError("--max-training-samples cannot be negative")
-    if args.mins_proposal_scheme == "en-rwalk":
-        if any(value < args.ensemble_walkers for value in args.nlive):
-            raise ValueError(
-                "each nlive must be at least --ensemble-walkers for en-rwalk"
-            )
+    if args.mins_proposal_scheme == "en-rwalk" and any(
+        value < args.ensemble_walkers for value in args.nlive
+    ):
+        raise ValueError("each nlive must be at least --ensemble-walkers for en-rwalk")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1148,6 +1270,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="MINS constrained replacement scheme.",
     )
     parser.add_argument("--proposal-batch-size", type=int, default=64)
+    parser.add_argument(
+        "--tie-policy",
+        choices=("strict", "randomized_plateau"),
+        default="strict",
+        help="MINS constrained-ordering policy.",
+    )
     parser.add_argument("--ensemble-walkers", type=int, default=16)
     parser.add_argument("--ensemble-sweeps", type=int, default=4)
     parser.add_argument("--ensemble-de-weight", type=float, default=0.60)
@@ -1213,6 +1341,7 @@ def main() -> int:
     true_logz = resolve_true_logz(args)
 
     output_dir = args.output_dir.expanduser().resolve()
+    fingerprint = benchmark_fingerprint(args)
     if args.overwrite and output_dir.exists() and not args.plot_only:
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1231,6 +1360,7 @@ def main() -> int:
             repeats=args.repeats,
             ncall_metric=args.ncall_metric,
             summary_path=summary_path,
+            requested_nlive=set(args.nlive),
         )
         png_path, pdf_path = plot_summary(
             summaries=summaries,
@@ -1241,6 +1371,11 @@ def main() -> int:
             show=args.show,
         )
         print_summary(summaries)
+        print_incomplete_summary(
+            rows=rows,
+            nlive_values=args.nlive,
+            repeats=args.repeats,
+        )
         print(f"\nSaved summary: {summary_path}")
         print(f"Saved plots:   {png_path} and {pdf_path}")
         return 0
@@ -1249,8 +1384,15 @@ def main() -> int:
         raise FileExistsError(
             f"{raw_path} already exists. Use --resume or --overwrite."
         )
+    if raw_path.exists() and args.resume:
+        validate_resume_config(output_dir=output_dir, fingerprint=fingerprint)
 
-    save_config(args=args, true_logz=true_logz, output_dir=output_dir)
+    save_config(
+        args=args,
+        true_logz=true_logz,
+        output_dir=output_dir,
+        fingerprint=fingerprint,
+    )
 
     model = TwinGaussianShell(
         ndim=args.ndim,
@@ -1273,7 +1415,7 @@ def main() -> int:
     for nlive in args.nlive:
         print(f"\n{'=' * 72}\nnlive = {nlive}\n{'=' * 72}")
 
-        cached = load_training_cache(output_dir, nlive)
+        cached = load_training_cache(output_dir, nlive, fingerprint)
         posterior: np.ndarray | None = None
         cache_metadata: dict[str, Any] | None = None
 
@@ -1333,6 +1475,7 @@ def main() -> int:
                     nlive=nlive,
                     posterior=posterior,
                     pilot_row=pilot_row,
+                    fingerprint=fingerprint,
                 )
                 cache_metadata = {"pilot_row": normalize_row(pilot_row)}
                 print(
@@ -1526,6 +1669,7 @@ def main() -> int:
                     proposal_scheme=args.mins_proposal_scheme,
                     dlogz=args.dlogz,
                     proposal_batch_size=args.proposal_batch_size,
+                    tie_policy=args.tie_policy,
                     ensemble_walkers=args.ensemble_walkers,
                     ensemble_sweeps=args.ensemble_sweeps,
                     ensemble_de_weight=args.ensemble_de_weight,
@@ -1599,6 +1743,7 @@ def main() -> int:
             repeats=args.repeats,
             ncall_metric=args.ncall_metric,
             summary_path=summary_path,
+            requested_nlive=set(args.nlive),
         )
 
     summaries = summarize_rows(
@@ -1606,6 +1751,7 @@ def main() -> int:
         repeats=args.repeats,
         ncall_metric=args.ncall_metric,
         summary_path=summary_path,
+        requested_nlive=set(args.nlive),
     )
     png_path, pdf_path = plot_summary(
         summaries=summaries,
@@ -1616,6 +1762,11 @@ def main() -> int:
         show=args.show,
     )
     print_summary(summaries)
+    print_incomplete_summary(
+        rows=rows,
+        nlive_values=args.nlive,
+        repeats=args.repeats,
+    )
     print(f"\nSaved raw runs: {raw_path}")
     print(f"Saved summary:  {summary_path}")
     print(f"Saved plots:    {png_path} and {pdf_path}")

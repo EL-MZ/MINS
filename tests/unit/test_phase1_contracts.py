@@ -38,6 +38,29 @@ def test_callable_model_vectorized_and_scalar_agree() -> None:
     np.testing.assert_allclose(vectorized.log_prior(points), scalar.log_prior(points))
 
 
+def test_scalar_likelihood_map_is_ordered_and_does_not_map_prior() -> None:
+    points = np.array([[-1.0], [0.5], [2.0]])
+    mapped_rows: list[np.ndarray] = []
+
+    def mapper(function: object, rows: np.ndarray) -> list[float]:
+        callable_function = function
+        mapped_rows.extend(np.array(row, copy=True) for row in rows)
+        return [callable_function(row) for row in rows]  # type: ignore[operator]
+
+    model = CallableModel(
+        ndim=1,
+        parameter_names=("x",),
+        log_likelihood_fn=lambda x: -(x[0] ** 2),
+        log_prior_fn=lambda x: -abs(x[0]),
+        vectorized=False,
+        scalar_likelihood_map=mapper,
+    )
+
+    np.testing.assert_allclose(model.log_likelihood(points), [-1.0, -0.25, -4.0])
+    np.testing.assert_allclose(model.log_prior(points), [-1.0, -0.5, -2.0])
+    np.testing.assert_array_equal(np.asarray(mapped_rows), points)
+
+
 def test_model_rejects_invalid_shape_and_nonfinite_points() -> None:
     model = CallableModel(
         ndim=2,

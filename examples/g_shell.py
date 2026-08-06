@@ -11,16 +11,17 @@ import morphZ
 from morphZ import setup_logging
 
 setup_logging(level=logging.INFO)
-# Prior cube: [-L, L]^D 
+# Prior cube: [-L, L]^D
 L = 6.0
 ndim = 30
-prior_volume = (2*L)**ndim
+prior_volume = (2 * L) ** ndim
 
 # Parameters of the twin shells (from paper)
 w1 = w2 = 0.1  # thickness of both shells
 r1 = r2 = 2.0  # radius of both shells
 c1 = np.array([-3.5] + [0.0] * (ndim - 1))  # center of first shell
-c2 = np.array([3.5] + [0.0] * (ndim - 1))   # center of second shell
+c2 = np.array([3.5] + [0.0] * (ndim - 1))  # center of second shell
+
 
 def logprior(theta):
     """Uniform prior over [-L, L]^D."""
@@ -28,6 +29,7 @@ def logprior(theta):
         return -np.log(prior_volume)
     else:
         return -np.inf
+
 
 def loglikelihood(theta):
     """
@@ -37,24 +39,26 @@ def loglikelihood(theta):
     # Distance from centers
     r_c1 = np.linalg.norm(theta - c1)
     r_c2 = np.linalg.norm(theta - c2)
-    
+
     # Log-likelihood components for each shell
     # Note: We work in log space for numerical stability
     log_norm1 = -0.5 * np.log(2 * np.pi * w1**2)
     log_norm2 = -0.5 * np.log(2 * np.pi * w2**2)
-    
-    log_exp1 = log_norm1 - 0.5 * ((r_c1 - r1) / w1)**2
-    log_exp2 = log_norm2 - 0.5 * ((r_c2 - r2) / w2)**2
-    
+
+    log_exp1 = log_norm1 - 0.5 * ((r_c1 - r1) / w1) ** 2
+    log_exp2 = log_norm2 - 0.5 * ((r_c2 - r2) / w2) ** 2
+
     # Use logsumexp for numerical stability when adding exponentials
     return logsumexp([log_exp1, log_exp2])
+
 
 def prior_transform(u):
     """
     Map unit cube [0,1]^D to [-L, L]^D.
     u: array in [0,1]^D
     """
-    return -L + 2*L*u
+    return -L + 2 * L * u
+
 
 # Optional: Visualization function for 2D case
 def plot_twin_shells_2d():
@@ -62,41 +66,42 @@ def plot_twin_shells_2d():
     if ndim != 2:
         print("Visualization only available for 2D case")
         return
-    
+
     # Create grid
     x = np.linspace(-6, 6, 200)
     y = np.linspace(-6, 6, 200)
     X, Y = np.meshgrid(x, y)
-    
+
     # Evaluate likelihood on grid
     Z = np.zeros_like(X)
     for i in range(X.shape[0]):
         for j in range(X.shape[1]):
-            theta = np.array([X[i,j], Y[i,j]])
-            Z[i,j] = np.exp(loglikelihood(theta))
-    
+            theta = np.array([X[i, j], Y[i, j]])
+            Z[i, j] = np.exp(loglikelihood(theta))
+
     # Plot
     plt.figure(figsize=(10, 8))
-    plt.contourf(X, Y, Z, levels=50, cmap='viridis')
-    plt.colorbar(label='Likelihood')
-    plt.xlabel('θ₁')
-    plt.ylabel('θ₂')
-    plt.title('Twin Gaussian Shells')
-    
+    plt.contourf(X, Y, Z, levels=50, cmap="viridis")
+    plt.colorbar(label="Likelihood")
+    plt.xlabel("θ₁")
+    plt.ylabel("θ₂")
+    plt.title("Twin Gaussian Shells")
+
     # Mark centers
-    plt.plot(c1[0], c1[1], 'r*', markersize=15, label='Center 1')
-    plt.plot(c2[0], c2[1], 'r*', markersize=15, label='Center 2')
-    
+    plt.plot(c1[0], c1[1], "r*", markersize=15, label="Center 1")
+    plt.plot(c2[0], c2[1], "r*", markersize=15, label="Center 2")
+
     # Draw circles showing the shell radii
-    circle1 = plt.Circle(c1[:2], r1, fill=False, color='red', linestyle='--', alpha=0.7)
-    circle2 = plt.Circle(c2[:2], r2, fill=False, color='red', linestyle='--', alpha=0.7)
+    circle1 = plt.Circle(c1[:2], r1, fill=False, color="red", linestyle="--", alpha=0.7)
+    circle2 = plt.Circle(c2[:2], r2, fill=False, color="red", linestyle="--", alpha=0.7)
     plt.gca().add_patch(circle1)
     plt.gca().add_patch(circle2)
-    
+
     plt.legend()
-    plt.axis('equal')
+    plt.axis("equal")
     plt.grid(True, alpha=0.3)
     plt.show()
+
 
 # Example usage with dynesty
 def run_dynesty_example():
@@ -104,29 +109,31 @@ def run_dynesty_example():
     try:
         import dynesty
         from dynesty import plotting as dyplot
-        
+
         # Run nested sampling
         sampler = dynesty.NestedSampler(loglikelihood, prior_transform, ndim)
         sampler.run_nested()
         results = sampler.results
-        
+
         print(f"Log evidence: {results.logz[-1]:.2f} ± {results.logzerr[-1]:.2f}")
-        
+
         # Plot results
         fig, axes = dyplot.runplot(results)
         plt.show()
-        
+
         return results
-        
+
     except ImportError:
         print("Dynesty not installed. Install with: pip install dynesty")
         return None
 
+
 # Analytical log-evidence values from the paper (for reference)
 analytical_logz = {
-    20: -36.09, # 20D case from paper
-    30: -60.13  # 30D case from paper
+    20: -36.09,  # 20D case from paper
+    30: -60.13,  # 30D case from paper
 }
+
 
 # -------------------------------
 # Run dynesty Nested Sampling
@@ -142,9 +149,9 @@ def run_nested_sampling(n_runs: int = 1, nlive: int = 200):
             loglikelihood,
             prior_transform,
             ndim,
-            nlive=nlive,      # number of live points; increase for accuracy
-            sample="rwalk",   # random-walk proposals; can try "unif", "slice"
-            bound="multi",    # bounding method ("multi" good for multimodal)
+            nlive=nlive,  # number of live points; increase for accuracy
+            sample="rwalk",  # random-walk proposals; can try "unif", "slice"
+            bound="multi",  # bounding method ("multi" good for multimodal)
         )
 
         print("Running dynesty Nested Sampling on Gaussian shell...")

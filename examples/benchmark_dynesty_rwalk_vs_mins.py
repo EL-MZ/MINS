@@ -164,24 +164,22 @@ class TwinGaussianShell:
         self.center_1[0] = -self.center_offset
         self.center_2[0] = self.center_offset
 
-        self._log_shell_norm = -0.5 * np.log(
-            2.0 * np.pi * self.shell_width**2
-        )
-        self._log_prior_density = -self.ndim * np.log(
-            2.0 * self.prior_half_width
-        )
+        self._log_shell_norm = -0.5 * np.log(2.0 * np.pi * self.shell_width**2)
+        self._log_prior_density = -self.ndim * np.log(2.0 * self.prior_half_width)
 
     def log_likelihood(self, theta: np.ndarray) -> float:
         """Scalar log likelihood used by Dynesty and CallableModel."""
         point = np.asarray(theta, dtype=float)
         radius_1 = np.linalg.norm(point - self.center_1)
         radius_2 = np.linalg.norm(point - self.center_2)
-        component_1 = self._log_shell_norm - 0.5 * (
-            (radius_1 - self.shell_radius) / self.shell_width
-        ) ** 2
-        component_2 = self._log_shell_norm - 0.5 * (
-            (radius_2 - self.shell_radius) / self.shell_width
-        ) ** 2
+        component_1 = (
+            self._log_shell_norm
+            - 0.5 * ((radius_1 - self.shell_radius) / self.shell_width) ** 2
+        )
+        component_2 = (
+            self._log_shell_norm
+            - 0.5 * ((radius_2 - self.shell_radius) / self.shell_width) ** 2
+        )
         return float(logsumexp((component_1, component_2)))
 
     def log_prior(self, theta: np.ndarray) -> float:
@@ -374,9 +372,7 @@ def make_failure_row(
 ) -> dict[str, Any]:
     message = str(error)
     if isinstance(error, BaseException):
-        message = "".join(
-            traceback.format_exception_only(type(error), error)
-        ).strip()
+        message = "".join(traceback.format_exception_only(type(error), error)).strip()
     return {
         "method": method,
         "method_label": method_label,
@@ -486,9 +482,7 @@ def prepare_training_samples(
     samples = np.asarray(posterior, dtype=float)[::thin]
     if max_samples > 0 and len(samples) > max_samples:
         rng = np.random.default_rng(seed)
-        indices = np.sort(
-            rng.choice(len(samples), size=max_samples, replace=False)
-        )
+        indices = np.sort(rng.choice(len(samples), size=max_samples, replace=False))
         samples = samples[indices]
     if samples.ndim != 2 or len(samples) < 2:
         raise ValueError(
@@ -729,13 +723,9 @@ def summarize_rows(
                 "ncall_direct_std": sample_standard_deviation(ncall_direct),
                 "ncall_training_mean": float(np.mean(ncall_training)),
                 "ncall_amortized_mean": float(np.mean(ncall_amortized)),
-                "ncall_amortized_std": sample_standard_deviation(
-                    ncall_amortized
-                ),
+                "ncall_amortized_std": sample_standard_deviation(ncall_amortized),
                 "ncall_cold_start_mean": float(np.mean(ncall_cold_start)),
-                "ncall_cold_start_std": sample_standard_deviation(
-                    ncall_cold_start
-                ),
+                "ncall_cold_start_std": sample_standard_deviation(ncall_cold_start),
                 "ncall_metric": ncall_metric,
                 "ncall_plot_mean": float(np.mean(ncall_plot)),
                 "ncall_plot_std": sample_standard_deviation(ncall_plot),
@@ -835,18 +825,10 @@ def plot_summary(
             key=lambda row: int(row["nlive"]),
         )
         x = np.asarray([row["nlive"] for row in group], dtype=float)
-        logz_mean = np.asarray(
-            [row["logz_mean"] for row in group], dtype=float
-        )
-        logz_std = np.asarray(
-            [row["logz_std"] for row in group], dtype=float
-        )
-        ncall_mean = np.asarray(
-            [row["ncall_plot_mean"] for row in group], dtype=float
-        )
-        ncall_std = np.asarray(
-            [row["ncall_plot_std"] for row in group], dtype=float
-        )
+        logz_mean = np.asarray([row["logz_mean"] for row in group], dtype=float)
+        logz_std = np.asarray([row["logz_std"] for row in group], dtype=float)
+        ncall_mean = np.asarray([row["ncall_plot_mean"] for row in group], dtype=float)
+        ncall_std = np.asarray([row["ncall_plot_std"] for row in group], dtype=float)
 
         style = styles.get(
             method,
@@ -1281,9 +1263,7 @@ def main() -> int:
     mins_method = f"mins_{args.mins_proposal_scheme}"
     mins_label = f"MINS ({args.mins_proposal_scheme})"
 
-    print(
-        f"Twin Gaussian shell: ndim={args.ndim}, reference logZ={true_logz:.3f}"
-    )
+    print(f"Twin Gaussian shell: ndim={args.ndim}, reference logZ={true_logz:.3f}")
     print(
         f"Grid: nlive={args.nlive}, repeats={args.repeats}; "
         f"MINS scheme={args.mins_proposal_scheme}"
@@ -1300,14 +1280,9 @@ def main() -> int:
         if cached is not None:
             posterior, cache_metadata = cached
             pilot_row = cache_metadata.get("pilot_row")
-            if pilot_row and not is_successful(
-                rows, "dynesty_rwalk", nlive, 0
-            ):
+            if pilot_row and not is_successful(rows, "dynesty_rwalk", nlive, 0):
                 upsert_row(rows, pilot_row, raw_path)
-            print(
-                "Loaded cached pilot posterior with shape "
-                f"{tuple(posterior.shape)}"
-            )
+            print(f"Loaded cached pilot posterior with shape {tuple(posterior.shape)}")
 
         if posterior is None:
             pilot_seed = deterministic_seed(
@@ -1352,9 +1327,7 @@ def main() -> int:
                 )
                 upsert_row(rows, pilot_row, raw_path)
                 if posterior is None:
-                    raise RuntimeError(
-                        "Dynesty pilot did not return posterior samples"
-                    )
+                    raise RuntimeError("Dynesty pilot did not return posterior samples")
                 save_training_cache(
                     output_dir=output_dir,
                     nlive=nlive,
@@ -1383,9 +1356,7 @@ def main() -> int:
 
         # Complete the remaining independent Dynesty repeats.
         for repeat in range(1, args.repeats):
-            if args.resume and is_successful(
-                rows, "dynesty_rwalk", nlive, repeat
-            ):
+            if args.resume and is_successful(rows, "dynesty_rwalk", nlive, repeat):
                 print(
                     f"[Dynesty rwalk] nlive={nlive}, "
                     f"repeat={repeat + 1}/{args.repeats}: cached"
@@ -1451,9 +1422,7 @@ def main() -> int:
                 print(f"  FAILED: {failure['message']}", file=sys.stderr)
 
         if posterior is None or cache_metadata is None:
-            reason = (
-                "MINS skipped because the pilot Dynesty posterior was unavailable"
-            )
+            reason = "MINS skipped because the pilot Dynesty posterior was unavailable"
             print(reason, file=sys.stderr)
             for repeat in range(args.repeats):
                 seed = deterministic_seed(
@@ -1531,9 +1500,7 @@ def main() -> int:
             continue
 
         for repeat in range(args.repeats):
-            if args.resume and is_successful(
-                rows, mins_method, nlive, repeat
-            ):
+            if args.resume and is_successful(rows, mins_method, nlive, repeat):
                 print(
                     f"[{mins_label}] nlive={nlive}, "
                     f"repeat={repeat + 1}/{args.repeats}: cached"
@@ -1568,9 +1535,7 @@ def main() -> int:
                     rwalk_facc=args.mins_rwalk_facc,
                     srwalk_steps=args.mins_srwalk_steps,
                     max_iterations=args.max_iterations,
-                    max_proposals_per_replacement=(
-                        args.max_proposals_per_replacement
-                    ),
+                    max_proposals_per_replacement=(args.max_proposals_per_replacement),
                     max_likelihood_calls=args.max_likelihood_calls,
                     max_wall_time=args.max_wall_time,
                     progress=args.progress,

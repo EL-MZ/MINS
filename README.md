@@ -10,10 +10,10 @@ sampling for post-processing Bayesian posterior samples.
 
 ## Installation
 
-For development, install the repository and its quality tools:
+Install [uv](https://docs.astral.sh/uv/) and sync a development environment:
 
 ```bash
-python -m pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 The scientific Morph adapter requires MorphZ 0.4.1.dev2 or newer. If MorphZ is
@@ -21,15 +21,17 @@ already installed from its source repository, the base package can be installed
 without resolving the optional extra:
 
 ```bash
-python -m pip install -e . --no-deps
+uv sync --no-extra
 ```
 
 For a normal user installation with Morph and the terminal/notebook progress
 bar:
 
 ```bash
-python -m pip install -e ".[morph,progress]"
+uv sync --extra morph --extra progress
 ```
+
+To run commands in the project environment, prefix them with `uv run`.
 
 ## Minimal API sketch
 
@@ -206,11 +208,11 @@ stopping semantics are defined in
 ## Development
 
 ```bash
-python -m pytest -m "not slow"
-python -m ruff format --check .
-python -m ruff check .
-python -m build
-python -m twine check dist/*
+uv run pytest -m "not slow"
+uv run ruff format --check .
+uv run ruff check .
+uv build
+uvx twine check dist/*
 ```
 
 Phase reports and exact validation commands are stored under

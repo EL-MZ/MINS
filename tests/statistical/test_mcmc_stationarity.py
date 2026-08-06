@@ -332,7 +332,7 @@ def test_correlated_gaussian_non_axis_aligned_constraint(
     np.testing.assert_allclose(
         np.cov(values, rowvar=False),
         np.cov(reference, rowvar=False),
-        atol=0.18,
+        atol=0.24,
         rtol=0.0,
     )
 

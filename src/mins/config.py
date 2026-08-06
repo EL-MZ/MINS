@@ -64,8 +64,8 @@ class EnsembleMoveWeights:
     """Relative weights for the ``en-rwalk`` proposal mixture."""
 
     de: float = 0.60
-    stretch: float = 0.05
-    gaussian: float = 0.35
+    stretch: float = 0.25
+    gaussian: float = 0.15
 
     def __post_init__(self) -> None:
         values = []

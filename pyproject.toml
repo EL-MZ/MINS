@@ -69,6 +69,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers -ra"
 testpaths = ["tests"]
+pythonpath = [".", "src"]
 markers = [
   "unit: deterministic unit tests",
   "integration: package and component integration tests",
